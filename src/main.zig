@@ -1,60 +1,57 @@
 const std = @import("std");
 
+const utils = @import("utils.zig");
+
 const scrabble = @import("scrabble.zig");
 const gaddag = @import("gaddag.zig");
 
-const InitialNode = gaddag.Node;
+const Settings = scrabble.Settings;
 const Gaddag = gaddag.Gaddag;
+const Node = gaddag.Node;
 
 pub fn main() !void
 {
 
-    //std.debug.print("{any}", .{ scrabble.DutchDef });
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer { _ = gpa.deinit(); }
+    const allocator = gpa.allocator();
+    const settings = try Settings.init(.Dutch);
 
-    var g: Gaddag = try Gaddag.init();
-    defer g.deinit();
-    try g.load_from_file("C:\\Data\\ScrabbleData\\nltest.txt");
-
-    //try g.load_example();
-
-
-    // var n = try InitialNode.init(12);
-    // defer n.deinit();
-
-    // n.print();
-    // try n.add_child(24);
-    // n.print();
-    // try n.add_child(31);
-    // n.print();
-    // try n.add_child(27);
-    // n.print();
-    // try n.add_child(14);
-    // n.print();
-    // try n.add_child(28);
-    // try n.add_child(1);
-    // n.print();
+    // separate block to debug memory leaks
+    {
+        var g: Gaddag = try Gaddag.init(allocator, &settings);
+        defer g.deinit();
+        var timer: std.time.Timer = try std.time.Timer.start();
+        try g.load_from_file("C:\\Data\\ScrabbleData\\nl.txt");
+        const elapsed = timer.lap();
+        std.debug.print("loading time ms {}\n", .{ elapsed / 1000000 });
+        std.debug.print("nr of nodes {} words {}\n", .{g.node_count, g.word_count});
 
 
-    //std.debug.print("{any}\n", .{ n });
+        //const node: ?*Node = g.find_node("boterha");
+        if (g.find_node("appel")) |node|
+        {
+            std.debug.print("FOUND {} bow={} eow={} whole={}\n", .{node.data.code, node.is_bow(), node.is_eow(), node.is_whole()});
+        }
+        else
+        {
+            utils.printline("NOT FOUND");
+        }
+        utils.printline("check out memory usage now");
+        try readline();
+    }
 
-    // // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    // std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    utils.printline("press enter to finish program");
+    try readline();
 
-    // // stdout is for the actual output of your application, for example if you
-    // // are implementing gzip, then only the compressed bytes should be sent to
-    // // stdout, not any debugging messages.
-    // const stdout_file = std.io.getStdOut().writer();
-    // var bw = std.io.bufferedWriter(stdout_file);
-    // const stdout = bw.writer();
-
-    // try stdout.print("Run `zig build test` to run the tests.\n", .{});
-
-    // try bw.flush(); // don't forget to flush!
 }
 
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
+
+fn readline() !void
+{
+    // Wait for the user to press Enter before exiting
+    const stdin = std.io.getStdIn().reader();
+    //try stdout.print("Press Enter to continue...\n", .{});
+    var buffer: [256]u8 = undefined; // Buffer for input
+    _ = try stdin.readUntilDelimiter(&buffer, '\n'); // Read until Enter is pressed
 }

@@ -1,19 +1,20 @@
+
 const std = @import("std");
+const assert = std.debug.assert;
+
+
 const utils =  @import("utils.zig");
 const scrabble =  @import("scrabble.zig");
 
 const ScrabbleError = scrabble.ScrabbleError;
 const Char = scrabble.Char;
 const CharCode = scrabble.CharCode;
-
-
-const allocator = std.heap.page_allocator;
-const assert = std.debug.assert;
+const Settings = scrabble.Settings;
 
 const NodeData = packed struct
 {
     /// The 5 bits character code
-    char: CharCode,
+    code: CharCode,
     /// Is this node the beginning of a word?
     is_bow: bool = false,
     /// Is this node the end of a word?
@@ -21,11 +22,11 @@ const NodeData = packed struct
     /// Is this node a whole word?
     is_whole: bool = false,
 
-    fn init(char: u5) NodeData
+    fn init(code: CharCode) NodeData
     {
         return NodeData
         {
-            .char = char,
+            .code = code,
         };
     }
 };
@@ -36,6 +37,8 @@ const AddResult = struct
     is_new: bool,
 };
 
+
+/// TODO checkout MemoryPool for nodes?
 /// This structure is used to initially build the tree.
 pub const Node = struct
 {
@@ -46,7 +49,7 @@ pub const Node = struct
 
     // TODO: we could think of bitflags here for identifying the children in one step, but the memory would grow quite some bit
 
-    pub fn init(char: CharCode) !Node
+    pub fn init(allocator: std.mem.Allocator, char: CharCode) !Node
     {
         return Node
         {
@@ -55,15 +58,20 @@ pub const Node = struct
         };
     }
 
-    pub fn deinit(self: *Node) void
+    pub fn deinit(self: *Node, allocator: std.mem.Allocator) void
     {
-        //const oldvalue = self.data.char;
         for(self.children) |*child|
         {
-            child.deinit();
+            child.deinit(allocator);
         }
         allocator.free(self.children);
-        //std.debug.print("[free initialnode ({})]", .{ oldvalue });
+    }
+
+    fn grow(self: *Node, allocator: std.mem.Allocator) !void
+    {
+        const new_len: usize = self.children.len + 1;
+        //std.debug.print("grow {}\n", .{new_len});
+        self.children = try allocator.realloc(self.children, new_len);
     }
 
     pub fn has_children(self: *const Node) bool
@@ -71,23 +79,39 @@ pub const Node = struct
         return self.children.len > 0;
     }
 
-    // pub fn find(self: *const Node, char: CharCode) ?*const Node
-    // {
-    //     for(self.children) |*child|
-    //     {
-    //         if (child.char == char)
-    //         {
-    //             return child;
-    //         }
-    //     }
-    //     return null;
-    // }
+    pub fn is_bow(self: *const Node) bool
+    {
+        return self.data.is_bow;
+    }
 
-    fn find(self: *Node, char: CharCode) ?*Node
+    pub fn is_eow(self: *const Node) bool
+    {
+        return self.data.is_eow;
+    }
+
+    pub fn is_whole(self: *const Node) bool
+    {
+        return self.data.is_whole;
+    }
+
+    pub fn bow(self: *const Node) ?*Node
+    {
+        //assert(self.is_bow() and self.children.len > 0);
+        if (self.is_bow())
+        {
+            return &self.children[0];
+        }
+        else
+        {
+            return null;
+        }
+    }
+
+    pub fn find(self: *Node, char: CharCode) ?*Node
     {
         for(self.children) |*node|
         {
-            if (node.data.char == char)
+            if (node.data.code == char)
             {
                 return node;
             }
@@ -95,31 +119,32 @@ pub const Node = struct
         return null;
     }
 
-    fn add_or_get(self: *Node, char: CharCode) !(AddResult)
+    /// Adds or gets a node to the children (sorted).\
+    /// When a new node was created the result's `is_new` flag will be set to true.
+    fn add_or_get(self: *Node, allocator: std.mem.Allocator, char: CharCode) !(AddResult)
     {
         assert(self.children.len < 32);
         if (self.find(char)) |nodeptr|
         {
             return AddResult { .node = nodeptr, .is_new = false };
         }
-        const new_node: *Node = try self.add(char);
+        const new_node: *Node = try self.add_sorted(allocator, char);
         return AddResult { . node = new_node, .is_new = true };
     }
 
-    fn add(self: *Node, char: CharCode) !*Node
+    fn add_sorted(self: *Node, allocator: std.mem.Allocator, char: CharCode) !*Node
     {
         assert(self.children.len < 32);
         const idx = self.find_insertion_index(char);
-        try self.grow();
-        //std.debug.print("new index for {} = {}\n", .{ char, idx });
+        try self.grow(allocator);
         if (idx == self.children.len)
         {
-            self.children[self.children.len - 1] = try Node.init(char);
+            self.children[self.children.len - 1] = try Node.init(allocator, char);
         }
         else
         {
             self.shift(idx);
-            self.children[idx] = try Node.init(char);
+            self.children[idx] = try Node.init(allocator, char);
         }
         return &self.children[idx];
     }
@@ -130,23 +155,15 @@ pub const Node = struct
         std.mem.copyBackwards(Node, self.children[idx + 1..idx + 1 + shift_len], self.children[idx..idx + shift_len]);
     }
 
-    fn grow(self: *Node) !void
-    {
-        const new_len: usize = self.children.len + 1;
-        self.children = try allocator.realloc(self.children, new_len);
-    }
-
     fn find_insertion_index(self: *const Node, new_char: u5) usize
     {
-        // This is the first.
-        if (self.children.len == 0) return 0;
-        // Take shortcut by comparing the last.
-        if (self.last_char() < new_char) return self.children.len;
+        if (self.children.len == 0) return 0; // it is the first.
+        if (self.last_char() < new_char) return self.children.len; // a little shortcut check.
         // Find place.
         for(self.children, 0..) |child, idx|
         {
-            assert(new_char != child.data.char);
-            if (child.data.char > new_char) return idx;
+            assert(new_char != child.data.code);
+            if (child.data.code > new_char) return idx;
         }
         return self.children.len;
     }
@@ -154,207 +171,309 @@ pub const Node = struct
     /// Internal unsafe routine: get the last char.
     fn last_char(self: *const Node) u5
     {
-        return self.children[self.children.len - 1].data.char;
+        return self.children[self.children.len - 1].data.code;
     }
 
     /// Debug print routine.
     pub fn print(self: *const Node) void
     {
-        std.debug.print("char({}) ", .{self.data.char});
+        std.debug.print("char({}) ", .{self.data.code});
         std.debug.print("children: [", .{});
         for(self.children) |child|
         {
-            std.debug.print("{},", .{ child.data.char });
+            std.debug.print("{},", .{ child.data.code });
         }
         std.debug.print("]\n", .{});
     }
 
-    pub fn print_tree(self: *const Node, depth: u32) void
-    {
-        _ = self;
-        _ = depth;
-    }
 };
 
 pub const Gaddag = struct
 {
+
+    /// The current settings, which determines the charcodes with which we build our tree.
+    allocator: std.mem.Allocator,
+    settings: *const Settings,
     node_count: u32,
     word_count: u32,
     root: Node,
 
-
-    pub fn init() !Gaddag
+    pub fn init(allocator: std.mem.Allocator, settings: *const Settings) !Gaddag
     {
         return Gaddag
         {
+            .allocator = allocator,
+            .settings = settings,
             .node_count = 0,
             .word_count = 0,
-            .root = try Node.init(0),
+            .root = try Node.init(allocator, 0),
         };
     }
 
     pub fn deinit(self: *Gaddag) void
     {
-        self.root.deinit();
+        self.root.deinit(self.allocator);
     }
 
     pub fn load_from_file(self: *Gaddag, filename: []const u8) !void
     {
-        //_ = self;
+        // load text file in memory.
         const file = try std.fs.openFileAbsolute(filename, .{});
         defer file.close();
 
-        const buf: []u8 = try allocator.alloc(u8, 64); // [_]u8{0} ** 32;
-        defer allocator.free(buf);
-
-        // Create a buffered reader
-        var reader = std.io.bufferedReader(file.reader());
-        const buf_reader = &reader.reader();
+        const file_buffer = try file.readToEndAlloc(self.allocator, 8000000);
+        defer self.allocator.free(file_buffer);
 
         // Read line by line
-        while (true)
+        var it = std.mem.splitAny(u8, file_buffer, &.{13, 10});
+        while (it.next()) |word|
         {
-            //const line = buf_reader.readUntilDelimiterAlloc(allocator, '\n', 32) catch break; // TODO: use 1 local buffer readUntilDelimiter
-            //defer allocator.free(line);
-
-            const line = buf_reader.readUntilDelimiter(buf, '\n') catch break; // TODO: use 1 local buffer readUntilDelimiter
-
-            const word = line; //std std.mem.trim(u8, line, " \r");
-            if (word.len > 0)
-            {
-                //std.debug.print("Word: {s}\n", .{word});
-                try self.add_word(word);
-            }
-            else
-            {
-                break;
-            }
+            if (word.len == 0) continue; // skip empty (split any is a bit strange)
+            //std.debug.print("Word: [{s}]\n", .{word});
+            try self.add_word(word);
         }
+        //_ = self;
     }
 
-    /// Add all rotated character values of this word to the gaddag tree
+
+    /// Some words about the gaddag tree structure. Designed to enable backward tracking at any position in any word using backward prefixes and forward suffixes
+    /// Let's take the word "instances". it is added to the tree as follows:\
+    /// `1. i + nstances`\
+    /// `2. ni + stances`\
+    /// `3. sni + tances`\
+    /// `4. tsni + ances`\
+    /// `5. atsni + nces`\
+    /// `6. natsni + ces`\
+    /// `7. cnatsni + es`\
+    /// `7. ecnatsni + s`\
+    /// `8. secnatsni`\
+    /// The character before the "+" is marked as nf_bow. A bow-node is inserted at index 0 of the children.\
+    /// The character "i" at #8 is marked as nf_whole
     fn add_word(self: *Gaddag, word: []const u8) !void
     {
-        std.debug.print("Word: {s}\n", .{word});
-        std.debug.print("  ", .{});
-
-        //const root: *Node = &self.root;
-        var parentnode: *Node = &self.root;
-
-        var it = try utils.str_iterator(word);
-        while (it.nextCodepoint()) |cp|
+        assert(self.node_count < 200000000);
+        self.word_count += 1;
+        if (self.word_count % (8192 * 4) == 0)
         {
-            if (cp > 511)
-            {
-                return ScrabbleError.UnsupportedCharacter;
-            }
-            const cc: CharCode = @truncate(cp);
-            //std.debug.print("(adding)", .{});
-            parentnode = try self.check_add_node(parentnode, cc);
-            //std.debug.print("{any}-", .{cc});
+             std.debug.print("words {} nodes {} {s}\n", .{self.word_count, self.node_count, word});
         }
 
-        std.debug.print("\n", .{});
+        const len: usize = word.len;
+        var buf = try std.BoundedArray(CharCode, 32).init(0);
+        var prefix = try std.BoundedArray(CharCode, 32).init(0);
+
+        // convert
+        for (word) |u|
+        {
+            buf.appendAssumeCapacity(try self.settings.codepoint_to_charcode(u));
+        }
+        for (0..len) |i|
+        {
+            try prefix.resize(0);
+            prefix.appendSliceAssumeCapacity(buf.slice()[0..i + 1]);
+            std.mem.reverse(CharCode, prefix.slice());
+            var node = &self.root;
+            for (0..prefix.len) |j|
+            {
+                node = try self.add_or_get_node(node, prefix.get(j)); // TODO: use just node function.
+
+                // at the end of the prefix.
+                if ( j == prefix.len - 1)
+                {
+
+                    const bownode: ?*Node = node.bow();
+                    if (bownode == null)
+                    {
+                        node.data.is_bow = true;
+                        _ = try self.add_or_get_node(node, 0); // add begin of word node
+                    }
+                    if (prefix.len == len)
+                    {
+                        node.data.is_whole = true;
+                    }
+                    // suffix
+                    var suffix = node.bow() orelse return ScrabbleError.GaddagBuildError;
+                    for (j + 1..len) |k|
+                    {
+                        suffix = try self.add_or_get_node(suffix, buf.get(k));
+                        if (k == len - 1)
+                        {
+                            suffix.data.is_eow = true; // mark end of word
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    fn add_word_gaddag(self: *Gaddag, word: []const u8) !void
+    fn print_slice(self: *const Gaddag, slice: []CharCode) void
     {
-        std.debug.print("Word: {s}\n", .{word});
-        std.debug.print("  ", .{});
-
-        //const root: *Node = &self.root;
-        var parentnode: *Node = &self.root;
-
-        var it = try utils.str_iterator(word);
-        while (it.nextCodepoint()) |cp|
+        for(slice) |cc|
         {
-            if (cp > 511)
-            {
-                return ScrabbleError.UnsupportedCharacter;
-            }
-            const cc: CharCode = @truncate(cp);
-            //std.debug.print("(adding)", .{});
-            parentnode = try self.check_add_node(parentnode, cc);
-            //std.debug.print("{any}-", .{cc});
+            const u = self.settings.code_to_char(cc);
+            std.debug.print("{c}", .{u});
         }
-
-        std.debug.print("\n", .{});
+            std.debug.print("\n", .{});
     }
 
-    fn check_add_node(self: *Gaddag, parent: *Node, char: CharCode) !*Node
+    pub fn find_node(self: *Gaddag, word: []const u8) ?*Node
+    {
+        assert(word.len > 0);
+        const fc: CharCode = self.settings.codepoint_to_charcode(word[0]) catch return null;
+        var node: *Node = self.root.find(fc) orelse return null;
+        std.debug.print("BOW {} bow={} eow={} whole={}\n", .{node.data.code, node.is_bow(), node.is_eow(), node.is_whole()});
+        node = node.bow() orelse return null;
+        for(word[1..]) |cp|
+        {
+            const cc: CharCode = self.settings.codepoint_to_charcode(cp) catch return null;
+            node = node.find(cc) orelse return null;
+            std.debug.print("SEARCH {} bow={} eow={} whole={}\n", .{node.data.code, node.is_bow(), node.is_eow(), node.is_whole()});
+        }
+        return node;
+    }
+
+    fn normalize(cp: u21) u21
+    {
+        return switch (cp)
+        {
+            'é', 'è', 'ë' => 'e',
+            'á' => 'a',
+            'í', 'î', 'ï' => 'i',
+            'ó' => 'o',
+            'ú' => 'u',
+            else => cp,
+        };
+    }
+
+    fn add_or_get_node(self: *Gaddag, parent: *Node, char: CharCode) !*Node
     {
         if (parent.find(char)) |node|
         {
-            std.debug.print("(existing {})", .{char});
+            //std.debug.print("(existing {})", .{char});
             return node;
         }
-        const result: AddResult = try parent.add_or_get(char);
+        const result: AddResult = try parent.add_or_get(self.allocator, char);
         if (result.is_new)
         {
-            std.debug.print("(new {})", .{char});
+            //std.debug.print("(new {})", .{char});
             self.node_count += 1;
         }
         return result.node;
     }
 
-    // fn find_node(self: *Gaddag) ?*Node
-    // {
+    pub fn print_tree(self: *const Gaddag) void
+    {
+        self.print_recursive(&self.root, 0);
+    }
 
+    fn print_recursive(self: *const Gaddag, node: *const Node, level: usize) void
+    {
+        for(0..level) |_|
+        {
+            std.debug.print(" ", .{});
+        }
+        //std.debug.print("|", .{});
+        const c = self.settings.code_to_char(node.data.code);
+        std.debug.print("{u}\n", .{ c });
+        for(node.children) |*child|
+        {
+            self.print_recursive(child, level + 1);
+        }
+    }
+
+};
+
+// pub const SmartNode = struct
+// {
+//     /// The character data for this node.
+//     data: NodeData,
+//     /// Index to the first child in fixed memory data chunk.
+//     child_idx: u32,
+
+//     fn init(data: NodeData, child_idx: u32) SmartNode
+//     {
+//         return SmartNode
+//         {
+//             .data = data,
+//             .child_idx = child_idx,
+//         };
+//     }
+// };
+
+
+// OLD SHIT
+
+    // Add all rotated character values of this word to the gaddag tree
+    // fn add_word(self: *Gaddag, word: []const u8) !void
+    // {
+    //     std.debug.print("Word: {s}\n", .{word});
+    //     std.debug.print("  ", .{});
+
+    //     //const root: *Node = &self.root;
+    //     var parentnode: *Node = &self.root;
+
+    //     var it = try utils.str_iterator(word);
+    //     while (it.nextCodepoint()) |cp|
+    //     {
+    //         if (cp > 511)
+    //         {
+    //             return ScrabbleError.UnsupportedCharacter;
+    //         }
+    //         const cc: CharCode = @truncate(cp);
+    //         //std.debug.print("(adding)", .{});
+    //         parentnode = try self.check_add_node(parentnode, cc);
+    //         //std.debug.print("{any}-", .{cc});
+    //     }
+
+    //     std.debug.print("\n", .{});
     // }
 
-    pub fn load_example(self: *Gaddag) !void
-    {
-        //var root = try Node.init(12);
-        //defer root.deinit();
-        const root: *Node = &self.root;
 
-        self.node_count = 1;
+    //    pub fn load_example(self: *Gaddag) !void
+    // {
+    //     //var root = try Node.init(12);
+    //     //defer root.deinit();
+    //     const root: *Node = &self.root;
 
-        _ = try self.add_node(root, 24);
-        _ = try self.add_node(root, 31);
-        _ = try self.add_node(root, 27);
-        const middle: *Node = try self.add_node(root, 1);
-        _ = try self.add_node(middle, 14);
+    //     self.node_count = 1;
 
-        _ = try self.add_node(root, 15);
-        _ = try self.add_node(root, 10);
-        _ = try self.add_node(root, 28);
-        // try n.add_child(24);
-        // try n.add_child(31);
-        // try n.add_child(27);
-        // try n.add_child(14);
-        // try n.add_child(28);
-        // try n.add_child(1);
-        root.print();
-    }
+    //     _ = try self.add_node(root, 24);
+    //     _ = try self.add_node(root, 31);
+    //     _ = try self.add_node(root, 27);
+    //     const middle: *Node = try self.add_node(root, 1);
+    //     _ = try self.add_node(middle, 14);
 
-};
-
+    //     _ = try self.add_node(root, 15);
+    //     _ = try self.add_node(root, 10);
+    //     _ = try self.add_node(root, 28);
+    //     // try n.add_child(24);
+    //     // try n.add_child(31);
+    //     // try n.add_child(27);
+    //     // try n.add_child(14);
+    //     // try n.add_child(28);
+    //     // try n.add_child(1);
+    //     root.print();
+    // }
 
 
 
+    // /// Validate and encode unicode string into a CharCode arraylist.\
+    // fn encode_word(self: *Gaddag, word: []const u8) !std.ArrayList(CharCode) // []CharCode
+    // {
+    //     //var buf: [32]CharCode = undefined;
+    //     var result = try std.ArrayList(CharCode).initCapacity(allocator, 32);
+    //     errdefer result.deinit();
 
-
-
-
-
-
-
-
-/// This structure is used afte reorganizing the memory.
-pub const SmartNode = struct
-{
-    /// The character data for this node.
-    data: NodeData,
-    /// Index to the first child in fixed memory data chunk.
-    child_idx: u32,
-
-    fn init(data: NodeData, child_idx: u32) SmartNode
-    {
-        return SmartNode
-        {
-            .data = data,
-            .child_idx = child_idx,
-        };
-    }
-};
+    //     var it = try utils.unicode_iterator(word);
+    //     while (it.nextCodepoint()) |cp|
+    //     {
+    //         //const normalized: u21 = normalize(cp);
+    //         const cc: CharCode = try self.settings.codepoint_to_charcode(cp);
+    //         //buf[len] = cc;
+    //         if (cc == 0) break;
+    //         result.appendAssumeCapacity(cc);
+    //     }
+    //     //buf[len - 1] = 0;
+    //     //length.* = len - 1;
+    //     return result;
+    // }

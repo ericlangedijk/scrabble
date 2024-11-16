@@ -1,24 +1,37 @@
 // basic structs for the game: settings, board, rack, move
-// all characters are in BMP = Basic Multilingual Plane (BMP) : 0 to 0xffff
+
+
+// Dutch (26): ABCDEFGHIJKLMNOPQRSTUVWXYZ
+// English (26): ABCDEFGHIJKLMNOPQRSTUVWXYZ
+// Italian (26): ABCDEFGHIJKLMNOPQRSTUVWXYZ
+// French (27): ABCDEFGHIJKLMNOPQRSTUVWXYZÉ
+// Spanish (27): ABCDEFGHIJKLMNÑOPQRSTUVWXYZ
+// Greek (24): ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ
+// Portuguese (27): ABCDEFGHIJKLMNOPQRSTUVWXYZÇ
+// Danish (29): ABCDEFGHIJKLMNOPQRSTUVWXYZÆØÅ
+// Swedish (29): ABCDEFGHIJKLMNOPQRSTUVWXYZÅÄÖ
+// Norwegian (29): ABCDEFGHIJKLMNOPQRSTUVWXYZÆØÅ
+// German (30): ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜß
 
 const std = @import("std");
+const utils = @import("utils.zig");
 
-const allocator = std.heap.page_allocator; // temp constant during testing.
-
-/// 9 bits, this is the real unicode char, max supported value = 511.
-pub const Char = u9;
+/// No unicode yet!
+/// 8 bits, this is the real unicode char, max supported value = 255.\
+/// We only support simple european languages for now.
+pub const Char = u8;
 
 /// 5 bits, this is our mapped value, max supported value = 31.
 pub const CharCode = u5;
 
 /// 11 bits, this is our square, scrabble board can have maximum 2047 squares.
-pub const Square = u11;
+pub const Square = u8;
 
 /// 4 bits, letter value, max value = 15,
 pub const Value = u4;
 
 /// Supported languages
-const Language = enum
+pub const Language = enum
 {
     Dutch,
     // quite a few here...
@@ -26,34 +39,73 @@ const Language = enum
 
 pub const Settings = struct
 {
-    tiles: []Tile,
-    values: [512]u8,
+    /// Our char table will look like this:\
+    /// `0 a b c d`...\
+    /// `0 1 2 3 4`...
+    codes: [256]CharCode = std.mem.zeroes([256]CharCode), // = [_]CharCode ** 512,
+
+    /// `0 1 2 3 4`...\
+    /// `0 a b c d`...
+    unicode_chars: [32]Char = std.mem.zeroes([32]Char),
+    //values: [512]u8,
 
     pub fn init(language: Language) !Settings
     {
-        // fixed for now during tests...
+        // fixed for now during development...
         if (language != .Dutch)
         {
             return ScrabbleError.UnsupportedLanguage;
         }
-        const def: *LocalDef = &DutchDef;
+        const def: *const LocalDef = &DutchDef;
+        var result = Settings {};
 
-        const view = std.unicode.Utf8View.init(def.unique_letters);
-        var it = view.iterator();// std.unicode.Utf8Iterator(&view);
-
-        while (it.next()) |c|
+        var code: CharCode = 1;
+        for(def.unique_letters) |ch|
         {
-            std.debug.print("Code point: {x} Char: {c}\n", .{c, c});
+            const cc: Char = ch;
+            result.codes[cc] = code;
+            result.unicode_chars[code] = cc;
+            code += 1;
         }
-        else
-        {
-            // Handle errors or invalid UTF-8
-            if (it.invalid)
-            {
-                std.debug.print("Invalid UTF-8 sequence detected.\n", .{});
-            }
-        }
+        return result;
+    }
 
+    pub fn codepoint_to_charcode(self: *const Settings, u: u21) !CharCode
+    {
+        try check_unicode_char_supported(u);
+        const c: Char = @truncate(u);
+        return self.codes[c];
+    }
+
+    pub fn codepoint_to_char(u: u21) !Char
+    {
+        try check_unicode_char_supported(u);
+        return @truncate(u);
+    }
+
+    pub fn char_to_code(self: *const Settings, u: Char) CharCode
+    {
+        return self.codes[u];
+    }
+
+    pub fn code_to_char(self: *const Settings, c: CharCode) Char
+    {
+        return self.unicode_chars[c];
+    }
+
+    pub fn is_supported_unicode_char(c: u21) bool
+    {
+        return c <= 255;//511;
+    }
+
+    pub fn check_unicode_char_supported(c: u21) !void
+    {
+        //if (std.unicode.)
+        if (!is_supported_unicode_char(c))
+        {
+            std.debug.print("INVALID CHAR {}", .{c});
+            return ScrabbleError.UnsupportedCharacter;
+        }
     }
 };
 
@@ -186,10 +238,11 @@ pub const ScrabbleError = error
 {
     UnsupportedLanguage,
     UnsupportedCharacter,
+    GaddagBuildError,
 };
 
 
-
+// OLD DELPHI move
 // case Byte of
 //       0:
 //         (

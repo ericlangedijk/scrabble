@@ -1,1 +1,4 @@
 .zig-cache/
+main.exe
+main.exe.obj
+main.pdb
