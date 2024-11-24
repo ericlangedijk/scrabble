@@ -465,6 +465,37 @@ pub const Move = struct
     }
 };
 
+pub const Bag = struct
+{
+    available: std.BoundedArray(u8, 32) = .{},
+    blanks: u8 = 0,
+
+    pub fn init_empty() Bag
+    {
+        return Bag {};
+    }
+
+    pub fn add(self: *Bag, charcode: CharCode) void
+    {
+        self.available[charcode] += 1;
+    }
+
+    pub fn to_string(self: *const Bag) std.BoundedArray(CharCode, 256)
+    {
+        const result: std.BoundedArray(CharCode, 256) = .{};
+        for(self.available.slice(), 0..) |avail, idx|
+        {
+            const charcode: CharCode = @intCast(idx);
+            const count: u8 = avail;
+            for (0..count) |_|
+            {
+                result.appendAssumeCapacity(charcode);
+            }
+        }
+        return result;
+    }
+};
+
 pub const Dim = struct
 {
     width: u9,
@@ -631,6 +662,12 @@ pub const Board = struct
     pub fn is_filled(self: *const Board, q: Square) bool
     {
         return !self.squares[q].is_empty();
+    }
+
+    pub fn get_letter(self: *const Board, square: Square) ?Letter
+    {
+        const result = self.squares[square];
+        return if (result.is_filled()) result else null;
     }
 
     pub fn set_string(self: *Board, settings: *const Settings, square: Square, str: []const u8, comptime ori: Orientation) void

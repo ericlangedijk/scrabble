@@ -19,6 +19,8 @@ const gaddag = @import("gaddag.zig");
 const Graph = gaddag.Graph;
 const Node = gaddag.Node;
 
+/// A fast movegenerator. 2.8 million moves per second measured.\
+/// As far as I know it generates all possible moves for any situation. And produces no duplicates.
 pub const MovGen = struct
 {
     const MAX_MOVES: u32 = 262144;
@@ -73,14 +75,24 @@ pub const MovGen = struct
         }
     }
 
+    pub fn sort(self: *MovGen) void
+    {
+        std.mem.sortUnstable(Move, self.movelist.items, {}, less_than);
+    }
+
+    fn less_than(_: void, a: Move, b: Move) bool
+    {
+        return a.score > b.score;
+    }
+
     fn reset(self: *MovGen) void
     {
-        // TODO: when progressing a game, we should *not* clear this...
+        // When progressing a game, we should *not* clear this...
         for (&self.squareinfo) |*s|
         {
             s.* = SquareInfo.init_empty();
         }
-        self.movelist.resize(0) catch return; //self.movelist.items.len = 0; // TODO: dont know if we can do this...
+        self.movelist.items.len = 0;
     }
 
     /// Process each anchor (eow) square.
@@ -112,19 +124,20 @@ pub const MovGen = struct
     {
         const inf: *SquareInfo = &self.squareinfo[square];
         if (inf.is_processed(ori)) return;
-        //if (self.squareinfo[square].is_processed(ori)) return;
 
-        if (board.is_filled(square))
+        //if (board.is_filled(square))
+        if (board.get_letter(square)) |boardletter|
         {
-            const boardletter: Letter = board.squares[square];
             const node: ?Node = self.graph.find_node(inputnode, boardletter.charcode);
             self.go_on(board, square, boardletter, node, rack, move, flags & NOT_IS_TRY, ori, dir);
         }
         else
         {
-            // Try rack letters. Maintain a trymask, preventing trying the same letter on the same square more than once. "Fake initialize" the trymask with already disabled charcodes.
+            // Try rack letters. Maintain a trymask, preventing trying the same letter on the same square more than once.
+            // "Fake initialize" the trymask with already disabled charcodes.
             if (rack.letters.len > 0)
             {
+                //const charcodemask = node.get_charcode_mask();
                 var trymask: CharCodeMask = inf.get_excluded_mask(ori);
                 for (rack.letters.slice(), 0..) |rackletter, idx|
                 {
@@ -324,7 +337,7 @@ pub const MovGen = struct
 
         if (!is_first_move)
         {
-            // We have to do a little filtering here on duplicate one-letter moves.
+            // We have to do a little filtering here on duplicate one-letter moves. These are very rare.
             if (move.letters.len == 1)
             {
                 if (ori == .Horizontal)
@@ -333,7 +346,7 @@ pub const MovGen = struct
                 }
                 else
                 {
-                    if (self.squareinfo[move.first().square].is_used_for_one) return; // do not store.
+                    if (self.squareinfo[move.first().square].is_used_for_one) return; // Do not store.
                 }
             }
             storedmove.score = scrabble.calculate_score(self.settings, board, move, ori);
