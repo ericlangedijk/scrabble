@@ -1,5 +1,8 @@
 const std = @import("std");
 
+const scrabble = @import("scrabble.zig");
+
+
 /// For now we only use this one to read text files.\
 /// For the rest we avoid unicode now.
 pub fn unicode_iterator(string: []const u8) !std.unicode.Utf8Iterator
@@ -8,7 +11,110 @@ pub fn unicode_iterator(string: []const u8) !std.unicode.Utf8Iterator
     return view.iterator();
 }
 
-pub fn printline(string: []const u8) void
+pub fn nps(count: usize, elapsed_nanoseconds: u64) u64
 {
-    std.debug.print("{s}\n", .{ string });
+    // Avoid division by zero
+    if (elapsed_nanoseconds == 0)
+    {
+        return 0.0;
+    }
+
+    const a: f64 = @floatFromInt(count);
+    const b: f64 = @floatFromInt(elapsed_nanoseconds);
+
+    const s: f64 =  a / b * 1_000_000_000.0;
+
+    return @intFromFloat(s);
 }
+
+pub fn get_coord_name(square: scrabble.Square) ![]const u8
+{
+    const x: u8 = @truncate(scrabble.square_x(square));
+    const y: u8 = @truncate(scrabble.square_y(square));
+    var buf: [3]u8 = undefined;
+    return try std.fmt.bufPrint(&buf, "{c}{d}", .{x + 'a', y + 1});
+}
+
+
+pub fn printboard(board: *const scrabble.Board, settings: *const scrabble.Settings) void
+{
+    //for (scrabble.Board.ALL_SQUARES) |q| std.debug.print("{}\n", .{q});
+    for (scrabble.Board.ALL_SQUARES) |q|
+    {
+        const x = scrabble.square_x(q);
+        //const y = scrabble.square_y(q);
+        var char = settings.code_to_char(board.squares[q].charcode);
+        if (char == 0) char = '.';
+        std.debug.print("{c} ", .{char});
+        if (x == 14) std.debug.print("\n", .{});
+    }
+    std.debug.print("\n", .{});
+
+    //std.debug.print("\x1b[34mThis is blue text\x1b[0m\n", .{}); // Blue text
+}
+
+
+pub fn printmove(board: *const scrabble.Board, move: *const scrabble.Move, settings: *const scrabble.Settings) void
+{
+    //for (scrabble.Board.ALL_SQUARES) |q| std.debug.print("{}\n", .{q});
+    std.debug.print("\n", .{});
+    for (scrabble.Board.ALL_SQUARES) |q|
+    {
+        const x = scrabble.square_x(q);
+        //const y = scrabble.square_y(q);
+
+        if (move.find(q)) |L|
+        {
+            const char = settings.code_to_char(L.charcode);
+            if (L.is_blank)
+                std.debug.print("\x1b[31m{c} \x1b[0m", .{char})
+            else
+                std.debug.print("\x1b[34m{c} \x1b[0m", .{char});
+        }
+        else
+        {
+            var char = settings.code_to_char(board.squares[q].charcode);
+            if (char == 0) char = '.';
+            std.debug.print("{c} ", .{char});
+        }
+        if (x == 14) std.debug.print("\n", .{});
+    }
+    std.debug.print("len {} anchor {} score {}", .{move.letters.len, move.anchor, move.score});
+    //std.debug.print("\x1b[34mThis is blue text\x1b[0m\n", .{}); // Blue text
+}
+
+
+    // std.debug.print("\x1b[31mThis is red text\x1b[0m\n", .{}); // Red text
+    // std.debug.print("\x1b[32mThis is green text\x1b[0m\n", .{}); // Green text
+        // std.debug.print("\x1b[34mThis is blue text\x1b[0m\n", .{}); // Blue text
+
+// pub fn get_coord_name(square: scrabble.Square) []const u8
+// {
+//     // const x: u8 = @truncate(scrabble.square_x(square));
+//     // const y: u8 = @truncate(scrabble.square_y(square));
+
+//     // var buffer: [3]u8 = undefined; // Fixed-size buffer
+//     // //_ = square;
+//     // //return &.{'h'};
+
+//     // std.fmt.formatBuf(&buffer, "{c}{}", .{x + 'a', y}) catch unreachable;
+
+//     // return buffer;
+
+//     // const col = (x + 1) + 'a' - 1; // Convert x to letter (a, b, c...)
+//     // const row = y + 1; // Convert y to row number (1, 2, 3...)
+//     // std.debug.print("col={}", .{col});
+//     // std.debug.print("row={}", .{row});
+//     // return &[_]u8{col, '0', row + '0'};
+
+//     //return std.fmt.fo
+
+// }
+
+// pub fn get_coord_name(square: scrabble.Square) [3]u8
+// {
+//     const x = scrabble.square_x(square);
+//     const y = scrabble.square_y(square);
+//     std.fmt.buf
+// }
+

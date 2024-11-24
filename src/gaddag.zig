@@ -5,6 +5,8 @@
 // TODO we do not have to work with node pointers, except when building.
 //      make the pointer stuff private and use node copies for public.
 
+/// TODO: write public get *const pointers, instead of returning a struct??
+
 const std = @import("std");
 const assert = std.debug.assert;
 const print = std.debug.print;
@@ -18,9 +20,24 @@ const CharCode = scrabble.CharCode;
 const CharCodeMask = scrabble.CharCodeMask;
 const Settings = scrabble.Settings;
 
+pub fn load_debug_graph(allocator: std.mem.Allocator, settings: *const Settings) !Graph
+{
+    std.debug.print("loading debug graph...\n", .{});
+    var graph: Graph = try Graph.init(allocator, settings, 16);
+    errdefer graph.deinit();
+    try graph.add_word_rotated("de");
+    //try graph.add_word_rotated("zd");
+    try graph.add_word_rotated("azen");
+    try graph.add_word_rotated("azend");
+    try graph.add_word_rotated("zen");
+    try graph.add_word_rotated("zend");
+    try graph.cleanup_free_space();
+    return graph;
+}
+
 pub fn load_graph_from_text_file(filename: []const u8, allocator: std.mem.Allocator, settings: *const Settings) !Graph
 {
-    std.debug.print("loading...\n", .{});
+    std.debug.print("loading graph from file...\n", .{});
 
     // load text file in memory.
     const file: std.fs.File = try std.fs.openFileAbsolute(filename, .{});
@@ -140,13 +157,11 @@ pub const Graph = struct
 
     pub fn deinit(self: *Graph) void
     {
-        for (0..32) |i|
-        {
-            self.freelists[i].deinit();
-        }
+        for (0..32) |i| self.freelists[i].deinit();
         self.nodes.deinit();
     }
 
+    // TODO get rid of the get_freelist function.
     fn cleanup_free_space(self: *Graph) !void
     {
         for(1..32) |i|
@@ -189,6 +204,12 @@ pub const Graph = struct
     pub fn get_rootnode_ptr(self: *Graph) *Node
     {
         return self.get_node_ptr(0);
+    }
+
+    /// Gets a child from the root. Note that the return value is *not* a bownode but a prefix (used for backward tracking).
+    pub fn find_root_entry(self: *Graph, charcode: CharCode) ?Node
+    {
+        return self.find_node(self.get_rootnode(), charcode);
     }
 
     pub fn get_bow(self: *Graph, parentnode: Node) ?Node
@@ -278,13 +299,32 @@ pub const Graph = struct
         return node;
     }
 
+
+    pub fn find_raw_word(self: *Graph, word: []const u8) ?*Node
+    {
+        if (word.len == 0) return null;
+        const fc: CharCode = self.settings.codepoint_to_charcode(word[0]) catch return null;
+        var node = self.find_node_ptr(self.get_rootnode_ptr(), fc) orelse return null;
+        for(word[1..]) |cp|
+        {
+            const cc: CharCode = self.settings.codepoint_to_charcode(cp) catch return null;
+            node = self.find_node_ptr(node, cc) orelse return null;
+        }
+        return node;
+    }
+
     pub fn find_node(self: *Graph, parentnode: Node, charcode: CharCode) ?Node
     {
         if (parentnode.count == 0) return null;
         const children = self.nodes.items[parentnode.child_ptr..parentnode.child_ptr + parentnode.count];
         for(children) |run|
         {
-            if (run.data.code == charcode) return run;
+            //print("(find)searching {} actual {}\n", .{charcode, run.data.code});
+            if (run.data.code == charcode)
+            {
+                const krak = run;
+                return krak;
+            }
         }
         return null;
     }
@@ -295,7 +335,18 @@ pub const Graph = struct
         const children = self.nodes.items[parentnode.child_ptr..parentnode.child_ptr + parentnode.count];
         for(children) |*run|
         {
-            if (run.data.code == charcode) return run;
+            if (run.data.code == charcode)
+            {
+                // const c: u32 = @as(u32, 1) << charcode;
+                // const m = run.mask;
+                // const address: u32 = @popCount(m & (c -% 1));
+                // const ptr = address + parentnode.child_ptr;
+                // const result = run;
+                // const child = self.get_node(ptr);
+                // assert(result.child_ptr == child.child_ptr);
+
+                return run;
+            }
         }
         return null;
     }
@@ -329,7 +380,7 @@ pub const Graph = struct
     {
         self.node_count += 1;
 
-        //const or_mask: u32 = get_mask(charcode);
+        //const mask: u32 = get_mask(charcode);
         const new_node = Node.init(charcode);
         const old_index: u32 = parentnode.child_ptr;
         const old_count = parentnode.count;
@@ -345,7 +396,7 @@ pub const Graph = struct
 
             parentnode.child_ptr = free_idx;
             parentnode.count = new_count;
-            //parentnode.mask.set(charcode);
+            //parentnode.mask |= mask;
 
             if (old_count > 0) @memcpy(self.nodes.items[copy_idx..copy_idx + old_count], self.nodes.items[old_index..old_index + old_count]);
             self.nodes.items[new_idx] = new_node;
@@ -366,7 +417,7 @@ pub const Graph = struct
 
             parentnode.count = new_count;
             parentnode.child_ptr = free_idx;
-            //parentnode.mask.set(charcode);
+            //parentnode.mask |= mask;
 
             // Append space at the end.
             try self.nodes.appendNTimes(Node.EMPTYNODE, new_count);
@@ -431,12 +482,15 @@ pub const Node = extern struct
     count: u8 align(1),
     /// Index into Graph.nodes. Children are always sequential in memory.
     child_ptr: u32 align(1),
-    // The charcode mask of children (not yet decided if we need that, we could vectorize it from the childptr address)
-    //mask: CharCodeMask align(1),
+    // The charcode mask of children (not yet decided if we need that, probably not)
+    //mask: u32 align(1),
+    // TODO check out performance when @popcounting the addres from here.
+    // TODO try building the graph with children directly behind the parent. this would save us the child_ptr.
+    // TODO the count can disappear and replaced by popcount.
 
     fn init(charcode: CharCode) Node
     {
-        return Node {.data = Data {.code = charcode }, .count = 0, .child_ptr = 0 };
+        return Node {.data = Data {.code = charcode }, .count = 0, .child_ptr = 0, };// .mask = 0 };
     }
 
     fn invalidnode() Node
@@ -446,8 +500,7 @@ pub const Node = extern struct
             .data = Data {},
             .count = 0,
             .child_ptr = 0xffffffff,
+      //      .mask = 0,
         };
     }
 };
-
-
