@@ -80,8 +80,7 @@ pub const MovGen = struct
         {
             s.* = SquareInfo.init_empty();
         }
-        self.movelist.resize(0) catch return;
-        //self.movelist.items.len = 0; // TODO: dont know if we can do this...
+        self.movelist.resize(0) catch return; //self.movelist.items.len = 0; // TODO: dont know if we can do this...
     }
 
     /// Process each anchor (eow) square.
@@ -111,7 +110,10 @@ pub const MovGen = struct
     /// The key method: with board letters just go on, otherwise try letters from the rack and *then* go on.
     fn gen(self: *MovGen, board: *const Board, square: Square, inputnode: Node, rack: Rack, move: Move, comptime flags: GenFlags, comptime ori: Orientation, comptime dir: Direction) void
     {
-        if (self.squareinfo[square].is_processed(ori)) return;
+        const inf: *SquareInfo = &self.squareinfo[square];
+        if (inf.is_processed(ori)) return;
+        //if (self.squareinfo[square].is_processed(ori)) return;
+
         if (board.is_filled(square))
         {
             const boardletter: Letter = board.squares[square];
@@ -123,7 +125,7 @@ pub const MovGen = struct
             // Try rack letters. Maintain a trymask, preventing trying the same letter on the same square more than once. "Fake initialize" the trymask with already disabled charcodes.
             if (rack.letters.len > 0)
             {
-                var trymask: CharCodeMask = CharCodeMask.initEmpty(); // TODO: the cached masks still have a bug
+                var trymask: CharCodeMask = inf.get_excluded_mask(ori);
                 for (rack.letters.slice(), 0..) |rackletter, idx|
                 {
                     if (trymask.isSet(rackletter)) continue;
@@ -142,10 +144,12 @@ pub const MovGen = struct
             // Try blanks.
             if (rack.blanks > 0)
             {
+                const excluded_mask: CharCodeMask = inf.get_excluded_mask(ori);
                 const children = self.graph.get_children(inputnode);
                 for (children) |child|
                 {
                     if (child.data.code == 0) continue; // skip bow nodes
+                    if (excluded_mask.isSet(child.data.code)) continue;
                     const tryletter: Letter = Letter.blank(child.data.code);
                     const tryrack: Rack = rack.removed_blank();
                     const trymove: Move = move.added(tryletter, square, dir);
@@ -168,7 +172,7 @@ pub const MovGen = struct
         const node = self.graph.find_root_entry(tryletter.charcode) orelse return;
         // These 2 cases will be handled normally.
         if (!board.is_next_free(square, opp, .Forwards) or !board.is_next_free(square, opp, .Backwards)) return;
-        // Check if we have a legel situation in the original direction.
+        // Check if we have a legel situation in the original direction. (This is also done in go_on but this is a shortcut)
         if (!self.cross_check(board, square, tryletter.charcode, opp)) return; // TODO: validate this is opp
         // Create a new move.
         var move: Move = Move.init_with_anchor(square);
@@ -179,14 +183,14 @@ pub const MovGen = struct
     }
 
     /// Depending on orientation and direction go to the next square. Note that `go_on` always has to be called from `gen`, even if `inputnode` is null.\
-    /// We can have (1) a pending move that has to be stored or (2) a point where we have to turn from backwards to forwards.
+    /// We can have a pending move that has to be stored.
     fn go_on(self: *MovGen, board: *const Board, square: Square, letter: Letter, inputnode: ?Node, rack: Rack, move: Move, comptime flags: GenFlags, comptime ori: Orientation, comptime dir: Direction) void
     {
         assert(letter.is_filled());
         const inf: *SquareInfo = &self.squareinfo[square];
         if (inf.is_processed(ori)) return;
 
-        // Check dead end or store pending move.
+        // Check dead end or check store pending move.
         if (!self.try_this(board, square, letter, inputnode, move, flags, ori, dir)) return;
 
         const node: Node = inputnode orelse return;
@@ -217,7 +221,6 @@ pub const MovGen = struct
                         self.gen(board, after_anchor, n, rack, move, flags, ori, .Forwards);
                     }
                 }
-
             }
         }
     }
@@ -256,19 +259,18 @@ pub const MovGen = struct
         return true;
     }
 
-    /// Cross check using (and filling) cached info.
+    /// Cross check using (and filling) cached info. The caching of included + excluded letters saves a *lot* of processing.
     fn cross_check(self: *MovGen, board: *const Board, square: Square, trycharcode: CharCode, comptime ori: Orientation) bool
     {
-        // TODO: BUG in the charcodes cache.
         const inf: *SquareInfo = &self.squareinfo[square];
-        //if (inf.excluded_charcodes.isSet(trycharcode)) return false;
-        //if (inf.included_charcodes.isSet(trycharcode)) return true;
+        if (inf.is_charcode_excluded(trycharcode, ori)) return false;
+        if (inf.is_charcode_included(trycharcode, ori)) return true;
         const ok: bool = self.do_crosscheck(board, square, trycharcode, ori);
-        if (ok) inf.included_charcodes.set(trycharcode) else inf.excluded_charcodes.set(trycharcode);
+        if (ok) inf.mark_charcode_included(trycharcode, ori) else inf.mark_charcode_excluded(trycharcode, ori);
         return ok;
     }
 
-    /// Checks valid crossword in the *opposite* orientation of `ori`.
+    /// Checks valid crossword for the *opposite* orientation of `ori`.
     pub fn do_crosscheck(self: *MovGen, board: *const Board, q: Square, trycharcode: CharCode, comptime ori: Orientation) bool
     {
         // example: ". . i n s t _ n c e . ." (only "a" will succeed).
@@ -413,26 +415,34 @@ pub const MovGen = struct
     }
 };
 
-pub const OrientedInfo = packed struct
-{
-    is_processed: bool = false,
-};
 
 /// During processing this struct is updated for little speedups.
 pub const SquareInfo = struct
 {
-    const EMPTY: SquareInfo = SquareInfo {. excluded_charcodes = 0, .included_charcodes = 0 };
+    //const EMPTY: SquareInfo = SquareInfo {. excluded_charcodes = 0, .included_charcodes = 0 };
+
+    pub const OrientedInfo = struct
+    {
+        excluded_charcodes: CharCodeMask = CharCodeMask.initEmpty(),
+        included_charcodes: CharCodeMask = CharCodeMask.initEmpty(),
+        is_processed: bool = false,
+        // has_prevsquare
+        // has_nextsquare
+        // has_prevneighbour
+        // has_nextneigbour
+        // is_prevfree
+        // is_nextfree
+        // is_eow
+        // is_bow
+    };
 
     const Flags = packed struct
     {
-        /// When switching direction to forwards we will encounter already processed squares (we already once turned around here).\
-        /// To prevent duplicate moves (and superfluous processing) we mark all these points "processed" during movegeneration.
+        /// Set when anchor is processed and also when crossword is processed from here.
         is_processed: bool
     };
 
 
-    excluded_charcodes: CharCodeMask,
-    included_charcodes: CharCodeMask,
     horz: OrientedInfo,
     vert: OrientedInfo,
     is_used_for_one: bool = false, // if we need more then make packed struct
@@ -441,12 +451,64 @@ pub const SquareInfo = struct
     {
         return SquareInfo
         {
-            .excluded_charcodes = CharCodeMask.initEmpty(),
-            .included_charcodes = CharCodeMask.initEmpty(),
             .horz = OrientedInfo {},
             .vert = OrientedInfo {},
             .is_used_for_one = false,
         };
+    }
+
+    fn get_excluded_mask(self: *const SquareInfo, comptime ori: Orientation) CharCodeMask
+    {
+        return switch (ori)
+        {
+            .Horizontal => self.horz.excluded_charcodes,
+            .Vertical => self.vert.excluded_charcodes,
+        };
+    }
+
+    fn get_included_mask(self: *const SquareInfo, comptime ori: Orientation) CharCodeMask
+    {
+        return switch (ori)
+        {
+            .Horizontal => self.horz.included_charcodes,
+            .Vertical => self.vert.included_charcodes,
+        };
+    }
+
+    fn is_charcode_excluded(self: *const SquareInfo, charcode: CharCode, comptime ori: Orientation) bool
+    {
+        return switch (ori)
+        {
+            .Horizontal => self.horz.excluded_charcodes.isSet(charcode),
+            .Vertical => self.vert.excluded_charcodes.isSet(charcode),
+        };
+    }
+
+    fn mark_charcode_excluded(self: *SquareInfo, charcode: CharCode, comptime ori: Orientation) void
+    {
+        switch (ori)
+        {
+            .Horizontal => self.horz.excluded_charcodes.set(charcode),
+            .Vertical => self.vert.excluded_charcodes.set(charcode),
+        }
+    }
+
+    fn is_charcode_included(self: *const SquareInfo, charcode: CharCode, comptime ori: Orientation) bool
+    {
+        return switch (ori)
+        {
+            .Horizontal => self.horz.included_charcodes.isSet(charcode),
+            .Vertical => self.vert.included_charcodes.isSet(charcode),
+        };
+    }
+
+    fn mark_charcode_included(self: *SquareInfo, charcode: CharCode, comptime ori: Orientation) void
+    {
+        switch (ori)
+        {
+            .Horizontal => self.horz.included_charcodes.set(charcode),
+            .Vertical => self.vert.included_charcodes.set(charcode),
+        }
     }
 
     fn mark_as_processed(self: *SquareInfo, comptime ori: Orientation) void
@@ -460,11 +522,11 @@ pub const SquareInfo = struct
 
     fn is_processed(self: *const SquareInfo, comptime ori: Orientation) bool
     {
-        switch (ori)
+        return switch (ori)
         {
-            .Horizontal => return self.horz.is_processed,
-            .Vertical => return self.vert.is_processed,
-        }
+            .Horizontal => self.horz.is_processed,
+            .Vertical => self.vert.is_processed,
+        };
     }
 };
 

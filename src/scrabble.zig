@@ -15,6 +15,7 @@
 // Norwegian (29): ABCDEFGHIJKLMNOPQRSTUVWXYZÆØÅ
 // German (30): ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜß
 
+//pub var NEIGHBOURCALLS: u64 = 0;
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -76,7 +77,6 @@ pub const Language = enum
     English,
     // quite a few here...
 };
-
 
 // comptime / monomorphization
 pub const Consts = struct
@@ -617,6 +617,7 @@ pub const Board = struct
 
     pub fn has_filled_neighbour(self: *const Board, q: Square, comptime ori: Orientation, comptime dir: Direction) bool
     {
+        // NEIGHBOURCALLS += 1;
         const nextsquare = next_square(q, ori, dir) orelse return false;
         return self.is_filled(nextsquare);
     }

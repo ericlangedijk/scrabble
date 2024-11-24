@@ -490,7 +490,7 @@ pub const Node = extern struct
 
     fn init(charcode: CharCode) Node
     {
-        return Node {.data = Data {.code = charcode }, .count = 0, .child_ptr = 0, };// .mask = 0 };
+        return Node {.data = Data {.code = charcode }, .count = 0, .child_ptr = 0, };
     }
 
     fn invalidnode() Node

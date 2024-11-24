@@ -36,7 +36,25 @@ pub fn main() !void
     var timer: std.time.Timer = try std.time.Timer.start();
     var g: gaddag.Graph = try gaddag.load_graph_from_text_file("C:\\Data\\ScrabbleData\\nl.txt", allocator, &settings);
     //var g: gaddag.Graph = try gaddag.load_debug_graph(allocator, &settings);
+
+    // for (g.nodes.items[0..30], 0..) |n, i|
+    // {
+    //     std.debug.print("#{} code={} bow {} eow {} whole {} childcount {} child_ptr {}\n", .{i, n.data.code, n.data.is_bow, n.data.is_eow, n.data.is_whole_word, n.count, n.child_ptr});
+    // }
+
+    // for (g.nodes.items) |n|
+    // {
+    //     if (n.data.code > 26)
+    //     {
+    //         std.debug.print("KRAK", .{});
+    //         break;
+    //     }
+    // }
+    // try gaddag.save_graph_to_file(&g, "C:\\Data\\ScrabbleData\\nl.bin");
+
     defer g.deinit();
+
+    //if (true) return;
 
     const elapsed = timer.lap();
     try g.validate();
@@ -73,7 +91,7 @@ fn test_board(allocator: std.mem.Allocator, settings: *const Settings, graph: *G
     var gen = try MovGen.init(allocator, settings, graph);
     defer gen.deinit();
 
-    //const ok = gen.do_crosscheck(&board, 111, 5, .Vertical);
+    //const ok = gen.do_crosscheck(&board, 116, settings.char_to_code('t'), .Horizontal);
     //std.debug.print("crosscheck {}\n", .{ok});
 
     //if (true) return;
@@ -108,7 +126,7 @@ fn test_board(allocator: std.mem.Allocator, settings: *const Settings, graph: *G
 
     std.debug.print("\n\ngenerate {} moves time ms {} {} nanos sum-score {}\n", .{ gen.movelist.items.len, elapsed / 1000000, elapsed, total });
     std.debug.print("moves per second {}", .{utils.nps(gen.movelist.items.len, elapsed)});
-
+    //std.debug.print("CUTOFFS {}", .{movgen.CUTOFFS});
 }
 
 fn printcolored() !void
