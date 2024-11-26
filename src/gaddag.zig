@@ -2,10 +2,6 @@
 // https://en.algorithmica.org/hpc/
 
 // TODO check file against valid setting letters during load.
-// TODO we do not have to work with node pointers, except when building.
-//      make the pointer stuff private and use node copies for public.
-
-/// TODO: write public get *const pointers, instead of returning a struct??
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -20,24 +16,11 @@ const CharCode = scrabble.CharCode;
 const CharCodeMask = scrabble.CharCodeMask;
 const Settings = scrabble.Settings;
 
-pub fn load_debug_graph(allocator: std.mem.Allocator, settings: *const Settings) !Graph
-{
-    std.debug.print("loading debug graph...\n", .{});
-    var graph: Graph = try Graph.init(allocator, settings, 16);
-    errdefer graph.deinit();
-    try graph.add_word_rotated("de");
-    //try graph.add_word_rotated("zd");
-    try graph.add_word_rotated("azen");
-    try graph.add_word_rotated("azend");
-    try graph.add_word_rotated("zen");
-    try graph.add_word_rotated("zend");
-    try graph.after_loading();
-    return graph;
-}
-
 pub fn load_graph_from_text_file(filename: []const u8, allocator: std.mem.Allocator, settings: *const Settings) !Graph
 {
     std.debug.print("loading graph from file...\n", .{});
+
+    var timer: std.time.Timer = try std.time.Timer.start();
 
     // load text file in memory.
     const file: std.fs.File = try std.fs.openFileAbsolute(filename, .{});
@@ -49,6 +32,9 @@ pub fn load_graph_from_text_file(filename: []const u8, allocator: std.mem.Alloca
     const file_buffer = try file.readToEndAlloc(allocator, file_size);
     defer allocator.free(file_buffer);
 
+    const read_file_time = timer.lap();
+    timer.reset();
+
     var graph: Graph = try Graph.init(allocator, settings, file_size);
     errdefer graph.deinit();
 
@@ -57,18 +43,23 @@ pub fn load_graph_from_text_file(filename: []const u8, allocator: std.mem.Alloca
     while (it.next()) |word|
     {
         if (word.len == 0) continue; // skip empty (split any is a bit strange)
-        try graph.add_word_rotated(word);
+        try graph.add_word(word);
     }
+
+    const building_time = timer.lap();
+    timer.reset();
 
     try graph.after_loading();
 
+    const sorting_time = timer.lap();
+    timer.reset();
+
     // check if we can find all words.
-    var timer: std.time.Timer = try std.time.Timer.start();
     it.reset();
     var found: u32 = 0;
     while (it.next()) |word|
     {
-        if (word.len == 0) continue; // skip empty (split any is a bit strange)
+        if (word.len == 0) continue;
         if (!graph.word_exists(word))
         {
             print("word not found {s}", .{word});
@@ -76,8 +67,13 @@ pub fn load_graph_from_text_file(filename: []const u8, allocator: std.mem.Alloca
         }
         found += 1;
     }
-    const elapsed = timer.lap();
-    print("search all {} time ms {}\n", .{ found, elapsed / 1000000 });
+    const search_time = timer.lap();
+
+    print("read file time ms = {}, nanos = {} \n", .{ read_file_time / 1000000, read_file_time });
+    print("building_time ms = {}, nanos = {} \n", .{ building_time / 1000000, building_time });
+    print("sorttime ms = {}, nanos = {} \n", .{ sorting_time / 1000000, sorting_time });
+    print("search all count = {}, time ms = {}, nanos = {}\n", .{ found, search_time / 1000000, search_time });
+    print("number of words = {}, number of nodes = {}\n", .{graph.word_count, graph.nodes.items.len});
 
     return graph;
 }
@@ -94,6 +90,7 @@ pub fn save_graph_to_file(graph: *Graph, filename: []const u8,) !void
     try writer.flush();
 }
 
+/// The Graph is only usable after calling `after_loading`.
 /// Let's take the word "instances". it is added to the tree as follows:\
 /// `1. i + nstances`\
 /// `2. ni + stances`\
@@ -171,6 +168,7 @@ pub const Graph = struct
             self.wasted += @truncate(freelist.items.len * i);
             for (freelist.items) |idx|
             {
+                //print("freeing #{} {} len {}\n", .{i, idx, i});
                 @memset(self.nodes.items[idx..idx + i], Node.INVALIDNODE);
             }
         }
@@ -181,27 +179,91 @@ pub const Graph = struct
             freelist.clearAndFree();
         }
 
-        var timer: std.time.Timer = try std.time.Timer.start();
-
-        for (0..self.nodes.items.len) |i|
+        // Sort all (valid) children.
+        const len = self.nodes.items.len;
+        for (0..len) |i|
         {
             const node: Node = self.get_node_by_index(@intCast(i));
-            if (node.count > 0)
+            if (node.count > 1)
             {
                 const slice = self.nodes.items[node.child_ptr..node.child_ptr + node.count];
                 std.mem.sortUnstable(Node, slice, {}, less_than);
             }
         }
-        const elapsed = timer.lap();
-        print("sorttime ms {} nanos {} \n", .{ elapsed / 1000000, elapsed });
-
-       //try self.nodes.ensureTotalCapacityPrecise(self.nodes.items.len);// shrinkRetainingCapacity(self.nodes.items.len);
-        //print("len {} cap {}", .{ self.nodes.items.len, self.nodes.capacity });
+        // TODO: shrink capacity.
     }
 
+    /// private for sorting childnodes
     fn less_than(_: void, a: Node, b: Node) bool
     {
         return a.data.code < b.data.code;
+    }
+
+    /// TODO: there seems to be a little BUG i did not manage to track yet....
+    pub fn validate(self: *Graph) !void
+    {
+        const len = self.nodes.items.len;
+
+        //for (0..self.nodes.items.len self.nodes.items, 0..) |node, idx|
+        for (0..len) |idx|
+        {
+            //if (idx > 50) break;
+            const node = self.nodes.items[idx];
+            if (node.count == 0) continue;
+            //print("NODE {} code [{}], children {} bow {} eow {} whole {} ptr {}\n", .{idx, node.data.code, node.count, node.data.is_bow, node.data.is_eow, node.data.is_whole_word, node.child_ptr});
+
+            const child_idx: u32 = node.child_ptr;
+            if (child_idx >= len)
+            {
+                return ScrabbleError.GaddagValidationFailed;
+            }
+            if (child_idx + node.count > len)
+            {
+                return ScrabbleError.GaddagValidationFailed;
+            }
+
+            if (node.count > 32)
+            {
+                return ScrabbleError.GaddagValidationFailed;
+            }
+
+            if (@popCount(node.mask) != node.count)
+            {
+                return ScrabbleError.GaddagValidationFailed;
+            }
+
+            // // //std.debug.print("\nidx {} code {} cnt {}\n", .{idx, node.data.code, node.count});
+            // var cmask: CharCodeMask = CharCodeMask.initEmpty();//.{};//node.get_charcode_mask();// @bitCast(node.mask);
+            // cmask.mask = node.mask;
+            // // var offset: u32 = child_idx;
+            // var iter = cmask.iterator(.{});
+            // while (iter.next()) |bit|
+            // {
+            // //     print("{}/", .{bit});
+            //      const c: CharCode = @intCast(bit);
+            //     if (c == 0)
+            //         std.debug.print("#/", .{})
+            //     else
+            //         std.debug.print("{c}/", .{self.settings.code_to_char(c)});
+
+            //     if (self.find_node(node, c) == null) std.debug.print("(WTF)", .{});
+            //     const check: Node = self.find_node(node, c) orelse Node.INVALIDNODE;
+            //     if (check.data.code != c)
+            //         std.debug.print("(WTF)", .{});
+            // }
+            // print("\n", .{});
+
+            // const children = self.get_children(node);
+            // for(children) |c|
+            // {
+            //     if (c.data.code == 0)
+            //         std.debug.print("#/", .{})
+            //     else
+            //         std.debug.print("{c}/", .{self.settings.code_to_char(c.data.code)});
+            // }
+            // print("\n", .{});
+
+        }
     }
 
     pub fn as_bytes(self: *Graph) []const u8
@@ -210,19 +272,19 @@ pub const Graph = struct
     }
 
     /// This is just the first node.
-    pub fn get_rootnode(self: *Graph) Node
+    pub fn get_rootnode(self: *const Graph) Node
     {
         return self.get_node_by_index(0);
     }
 
     /// Gets a child from the root. Note that the return value is *not* a bownode but a prefix (used for backward tracking).
-    pub fn find_root_entry(self: *Graph, charcode: CharCode) ?Node
+    pub fn find_node_from_root(self: *const Graph, charcode: CharCode) ?Node
     {
         return self.find_node(self.get_rootnode(), charcode);
     }
 
     /// Direct get.
-    pub fn get_node_by_index(self: *Graph, idx: u32) Node
+    pub fn get_node_by_index(self: *const Graph, idx: u32) Node
     {
         assert(idx < self.nodes.items.len);
         return self.nodes.items[idx];
@@ -230,63 +292,194 @@ pub const Graph = struct
 
     /// Key method. Using the node mask to directly convert it to an index. This only works if the nodes are sorted.
     /// Thanks to Zigmaster Sze
-    pub fn find_node(self: *Graph, parentnode: Node, charcode: CharCode) ?Node
+    pub fn find_node(self: *const Graph, parentnode: Node, charcode: CharCode) ?Node
     {
         const charcode_mask: u32 = get_mask(charcode);
         if (parentnode.mask & charcode_mask == 0) return null;
         const index = @popCount(parentnode.mask & (charcode_mask -% 1));
         return self.nodes.items[parentnode.child_ptr + index];
+    }
 
-        // The below code is sequential
-        // if (parentnode.count == 0) return null;
-        // const children = self.nodes.items[parentnode.child_ptr..parentnode.child_ptr + parentnode.count];
-        // for(children) |run|
-        // {
-        //     //print("(find)searching {} actual {}\n", .{charcode, run.data.code});
-        //     if (run.data.code == charcode) return run;
-        // }
-        // return null;
+    /// Sequential search. Debug only.
+    pub fn find_node_unsorted(self: *const Graph, parentnode: Node, charcode: CharCode) ?Node
+    {
+        if (parentnode.count == 0) return null;
+        const children = self.nodes.items[parentnode.child_ptr..parentnode.child_ptr + parentnode.count];
+        for(children) |run| if (run.data.code == charcode) return run;
+        return null;
     }
 
     /// Gets the bow node (only if this node has the is_bow flag set). The bow node is always the first child.
-    pub fn get_bow(self: *Graph, parentnode: Node) ?Node
+    pub fn get_bow(self: *const Graph, parentnode: Node) ?Node
     {
         if (parentnode.count == 0 or !parentnode.data.is_bow) return null;
         return self.get_node_by_index(parentnode.child_ptr);
     }
 
-    // pub fn find_node_by_mask(self: *Graph, parentnode: Node, charcode: CharCode) ?Node
-    // {
-    //     const charcode_mask: u32 = get_mask(charcode);
-    //     if (parentnode.mask & charcode_mask == 0) return null;
-    //     const index = @popCount(parentnode.mask & (charcode_mask -% 1));
-    //     return self.nodes.items[parentnode.child_ptr + index];
-    // }
-
     /// Gets a direct slice to the child nodes.
-    pub fn get_children(self: *Graph, parentnode: Node) []const Node
+    pub fn get_children(self: *const Graph, parentnode: Node) []const Node
     {
         return self.nodes.items[parentnode.child_ptr..parentnode.child_ptr + parentnode.count];
     }
 
-    pub fn word_exists(self: *Graph, word: []const u8) bool
+    pub fn word_exists(self: *const Graph, word: []const u8) bool
     {
         return self.find_word(word) != null;
     }
 
     // TODO: we also want a codepoint_to_charcode which is a bit faster, if possible
-    pub fn find_word(self: *Graph, word: []const u8) ?*Node
+    fn find_word(self: *const Graph, word: []const u8) ?Node
     {
         if (word.len == 0) return null;
         const fc: CharCode = self.settings.codepoint_to_charcode(word[0]) catch return null;
-        var node = self.find_node_ptr_unsorted(self.get_rootnode_ptr(), fc) orelse return null;
-        node = self.get_bow_ptr(node) orelse return null;
+        var node: Node = self.find_node(self.get_rootnode(), fc) orelse return null;
+        node = self.get_bow(node) orelse return null;
         for(word[1..]) |cp|
         {
             const cc: CharCode = self.settings.codepoint_to_charcode(cp) catch return null;
-            node = self.find_node_ptr_unsorted(node, cc) orelse return null;
+            node = self.find_node(node, cc) orelse return null;
         }
-        return node; // TODO: check is_eow
+        return if (node.data.is_eow) node else null;
+    }
+
+    /// private
+    fn add_word(self: *Graph, word: []const u8) !void
+    {
+        self.word_count += 1; // TODO: we are not 100% sure, the word could be a duplicate
+
+        const buf = try self.encode_word(word);
+        const word_len: usize = word.len;
+        var prefix = try std.BoundedArray(CharCode, 32).init(0);
+
+
+        //std.debug.print("{s}\n", .{word});
+
+        for (0..word_len) |i|
+        {
+            prefix.len = 0;
+            //try prefix.resize(0);
+            prefix.appendSliceAssumeCapacity(buf.slice()[0..i + 1]);
+            std.mem.reverse(CharCode, prefix.slice());
+
+            // for(prefix.slice()) |c|
+            // {
+            //     std.debug.print("{c}/", .{self.settings.code_to_char(c)});
+            // }
+            // std.debug.print("\n", .{});
+
+            var node: *Node = self.get_rootnode_ptr();
+            for (0..prefix.len) |j|
+            {
+                node = try self.add_or_get_node(node, prefix.get(j), false);
+
+                // At the end of the prefix.
+                if (j == prefix.len - 1)
+                {
+                    if (prefix.len == word_len) node.data.is_whole_word = true;
+
+                    var bow_node = self.get_bow_ptr(node);
+                    if (bow_node == null)
+                    {
+                        node.data.is_bow = true;
+                        bow_node = try self.add_node(node, 0, true); // add begin-of-word node (always index #0)
+                        //assert(self.get_bow_ptr(node) == bow_node);
+                        //std.debug.print("+\n", .{});
+                    }
+
+                    // Switch to bow and add suffix.
+                    var suffix = bow_node orelse return ScrabbleError.GaddagBuildError;
+                    for (j + 1..word_len) |k|
+                    {
+                        suffix = try self.add_or_get_node(suffix, buf.get(k), false);
+                        //std.debug.print("{c}\\", .{self.settings.code_to_char(suffix.data.code)});
+                        if (k == word_len - 1)
+                        {
+                            suffix.data.is_eow = true; // mark end of word
+                            //std.debug.print("EOW\n", .{});
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// private
+    fn encode_word(self: *Graph, word: []const u8) !std.BoundedArray(CharCode, 32)
+    {
+        var buf = try std.BoundedArray(CharCode, 32).init(0);
+        for (word) |u|
+        {
+            buf.appendAssumeCapacity(try self.settings.codepoint_to_charcode(u));
+        }
+        return buf;
+    }
+
+    /// private
+    fn add_or_get_node(self: *Graph, parentnode: *Node, charcode: CharCode, comptime is_bow: bool) !*Node
+    {
+        if (self.find_node_ptr_unsorted(parentnode, charcode)) |node|
+        {
+            return node;
+        }
+        return try self.add_node(parentnode, charcode, is_bow);
+    }
+
+    /// private
+    /// TODO: there seems to be a little BUG i did not manage to track yet....
+    fn add_node(self: *Graph, parentnode: *Node, charcode: CharCode, comptime is_bow: bool) !*Node
+    {
+        self.node_count += 1;
+
+        const mask: u32 = get_mask(charcode);
+        const new_node = Node.init(charcode);
+        const old_index: u32 = parentnode.child_ptr;
+        const old_count: u8 = parentnode.count;
+        const new_count: u8 = old_count + 1;
+        const freelist = self.get_freelist(new_count);
+        // If we have freespace use that.
+        if (freelist.items.len > 0)
+        {
+            const free_idx: u32 = freelist.pop(); // this is the free index with enough space
+            const new_idx: u32 = if (is_bow) free_idx else free_idx + old_count;
+            const copy_idx: u32 = if (is_bow)  free_idx + 1 else free_idx;
+
+            parentnode.child_ptr = free_idx;
+            parentnode.count = new_count;
+            parentnode.mask |= mask;
+
+            //if (free_idx == 1) std.debug.print("replace free at 1 {} {} {}\n", .{old_count, new_count, new_node});
+            //if (copy_idx == old_index) std.debug.print("WTF", .{});
+
+            if (old_count > 0) @memcpy(self.nodes.items[copy_idx..copy_idx + old_count], self.nodes.items[old_index..old_index + old_count]);
+            self.nodes.items[new_idx] = new_node;
+            return self.get_node_ptr_by_index(new_idx);
+        }
+        // Otherwise append to nodes.
+        else
+        {
+            // Store space for later re-use.
+            if (old_count > 0)
+            {
+                const oldlist = self.get_freelist(old_count);
+                try oldlist.append(parentnode.child_ptr);
+            }
+            const free_idx: u32 = @truncate(self.nodes.items.len);
+            const new_idx: u32 = if (is_bow) free_idx else free_idx + old_count;
+            const copy_idx: u32 = if (is_bow) free_idx + 1 else free_idx;
+
+            //if (free_idx == 1) std.debug.print("append free at 1 {} {} {}\n", .{old_count, new_count, new_node});
+            //if (copy_idx == old_index) std.debug.print("WTF", .{});
+
+            parentnode.count = new_count;
+            parentnode.child_ptr = free_idx;
+            parentnode.mask |= mask;
+
+            // Append space at the end.
+            try self.nodes.appendNTimes(Node.EMPTYNODE, new_count);
+            if (old_count > 0) @memcpy(self.nodes.items[copy_idx..copy_idx + old_count], self.nodes.items[old_index..old_index + old_count]);
+            self.nodes.items[new_idx] = new_node;
+            return self.get_node_ptr_by_index(new_idx);
+        }
     }
 
     /// private
@@ -309,133 +502,15 @@ pub const Graph = struct
         return self.get_node_ptr_by_index(parentnode.child_ptr);
     }
 
-    /// private
-    fn add_word_rotated(self: *Graph, word: []const u8) !void
-    {
-        self.word_count += 1; // TODO: we are not 100% sure, the word could be a duplicate
-
-        const buf = try self.encode_word(word);
-        const word_len: usize = word.len;
-        var prefix = try std.BoundedArray(CharCode, 32).init(0);
-
-        for (0..word_len) |i|
-        {
-            try prefix.resize(0);
-            prefix.appendSliceAssumeCapacity(buf.slice()[0..i + 1]);
-            std.mem.reverse(CharCode, prefix.slice());
-
-            //std.debug.print("{any}\n", .{prefix});
-
-            var node: *Node = self.get_rootnode_ptr();
-            for (0..prefix.len) |j|
-            {
-                node = try self.add_or_get_node(node, prefix.get(j), false);
-
-                // at the end of the prefix.
-                if (j == prefix.len - 1)
-                {
-                    if (prefix.len == word_len) node.data.is_whole_word = true;
-                    //node.data.is_bow = true;
-                    var bow_node = self.get_bow_ptr(node);
-                    if (bow_node == null)
-                    {
-                        node.data.is_bow = true;
-                        bow_node = try self.add_node(node, 0, true); // add begin of word node at the beginning
-                    }
-                    var suffix = bow_node orelse return ScrabbleError.GaddagBuildError;
-                    for (j + 1..word_len) |k|
-                    {
-                        suffix = try self.add_or_get_node(suffix, buf.get(k), false);
-                        if (k == word_len - 1) suffix.data.is_eow = true; // mark end of word
-                    }
-                }
-            }
-        }
-    }
-
-    /// private
-    fn encode_word(self: *Graph, word: []const u8) !std.BoundedArray(CharCode, 32)
-    {
-        var buf = try std.BoundedArray(CharCode, 32).init(0);
-        for (word) |u|
-        {
-            buf.appendAssumeCapacity(try self.settings.codepoint_to_charcode(u));
-        }
-        return buf;
-    }
-
-    /// private
+    /// private. During build the children are not yet sorted: we have to search.
     fn find_node_ptr_unsorted(self: *Graph, parentnode: *Node, charcode: CharCode) ?*Node
     {
         if (parentnode.count == 0) return null;
+        const popcount = @popCount(parentnode.mask);
+        assert(popcount == parentnode.count);
         const children = self.nodes.items[parentnode.child_ptr..parentnode.child_ptr + parentnode.count];
-        for(children) |*run|
-        {
-            if (run.data.code == charcode) return run;
-        }
+        for(children) |*run| if (run.data.code == charcode) return run;
         return null;
-    }
-
-    /// private
-    fn add_or_get_node(self: *Graph, parentnode: *Node, charcode: CharCode, comptime is_bow: bool) !*Node
-    {
-        if (self.find_node_ptr_unsorted(parentnode, charcode)) |node|
-        {
-            return node;
-        }
-        return try self.add_node(parentnode, charcode, is_bow);
-    }
-
-    /// private
-    fn add_node(self: *Graph, parentnode: *Node, charcode: CharCode, comptime is_bow: bool) !*Node
-    {
-        self.node_count += 1;
-
-        const mask: u32 = get_mask(charcode);
-        const new_node = Node.init(charcode);
-        const old_index: u32 = parentnode.child_ptr;
-        const old_count = parentnode.count;
-        const new_count = old_count + 1;
-        const freelist = self.get_freelist(new_count);
-        //assert(old_count < 28);
-        // If we have freespace use that.
-        if (freelist.items.len > 0)
-        {
-            const free_idx: u32 = freelist.pop(); // this is the free index with enough space
-            const new_idx: u32 = if (is_bow == false) free_idx + old_count else free_idx;
-            const copy_idx: u32 = if (is_bow == false) free_idx else free_idx + 1;
-
-            parentnode.child_ptr = free_idx;
-            parentnode.count = new_count;
-            parentnode.mask |= mask;
-
-            if (old_count > 0) @memcpy(self.nodes.items[copy_idx..copy_idx + old_count], self.nodes.items[old_index..old_index + old_count]);
-            self.nodes.items[new_idx] = new_node;
-            return self.get_node_ptr_by_index(new_idx);
-        }
-        // Otherwise append to nodes.
-        else
-        {
-            // Store space for later re-use.
-            if (old_count > 0)
-            {
-                const oldlist = self.get_freelist(old_count);
-                try oldlist.append(parentnode.child_ptr);
-            }
-            const free_idx: u32 = @truncate(self.nodes.items.len);
-            const new_idx: u32 = if (is_bow == false) free_idx + old_count else free_idx;
-            const copy_idx: u32 = if (is_bow == false) free_idx else free_idx + 1;
-
-            parentnode.count = new_count;
-            parentnode.child_ptr = free_idx;
-            parentnode.mask |= mask;
-
-            // Append space at the end.
-            try self.nodes.appendNTimes(Node.EMPTYNODE, new_count);
-            if (old_count > 0) @memcpy(self.nodes.items[copy_idx..copy_idx + old_count], self.nodes.items[old_index..old_index + old_count]);
-            self.nodes.items[new_idx] = new_node;
-            return self.get_node_ptr_by_index(new_idx);
-        }
     }
 
     /// private
@@ -450,25 +525,8 @@ pub const Graph = struct
         return @as(u32, 1) << charcode;
     }
 
-    /// TODO: more testing
-    pub fn validate(self: *Graph) !void
-    {
-        const len = self.nodes.items.len;
-        for (self.nodes.items) |*node|
-        {
-            if (node.count == 0) continue;
-            const idx: u32 = node.child_ptr;
-            if (idx >= len)
-            {
-                return ScrabbleError.GaddagValidationFailed;
-            }
-            if (idx + node.count > len)
-            {
-                return ScrabbleError.GaddagValidationFailed;
-            }
-        }
-    }
 };
+
 
 /// 10 bytes with mask. 6 byte without mask. TODO: we could squeeze 6 into 5 if we limit to 65 million nodes.
 pub const Node = extern struct
@@ -498,10 +556,7 @@ pub const Node = extern struct
     child_ptr: u32 align(1),
     // The charcode mask of children (not yet decided if we need that, probably not)
     mask: u32 align(1),
-    // TODO: to make the mask working children should be sorted.
-    // TODO check out performance when @popcounting the addres from here.
-    // TODO try building the graph with children directly behind the parent. this would save us the child_ptr.
-    // TODO the count can disappear and replaced by popcount.
+    // TODO the count field can disappear and replaced by popcount. but it will have 3-5 clockcycles at each call for popcount i believe.
 
     fn init(charcode: CharCode) Node
     {
@@ -528,59 +583,9 @@ pub const Node = extern struct
     {
         return @bitCast(~self.mask);
     }
+
+    pub fn contains(self: *const Node, charcode: CharCode) bool
+    {
+        return self.mask & (@as(u32, 1) << charcode) != 0;
+    }
 };
-
-    // pub fn debug_find_word(self: *Graph, word: []const u8) void
-    // {
-    //     const root = self.get_rootnode();
-    //     print("ROOT   : _ is_bow: {} is_eow: {} is_whole: {} childcount: {} childptr: {}\n", .{root.data.is_bow, root.data.is_eow, root.data.is_whole_word, root.count, root.child_ptr});
-    //     if (word.len == 0) return;
-    //     const fc: CharCode = self.settings.codepoint_to_charcode(word[0]) catch return;
-    //     var node = self.find_node_ptr(self.get_rootnode_ptr(), fc) orelse return;
-    //     print("ENTER  : {c} is_bow: {} is_eow: {} is_whole: {} childcount: {} childptr: {}\n", .{word[0], node.data.is_bow, node.data.is_eow, node.data.is_whole_word, node.count, node.child_ptr});
-    //     node = self.get_bow_ptr(node) orelse return;
-    //     print("BOWNODE: _ is_bow: {} is_eow: {} is_whole: {} childcount: {} childptr: {}\n", .{ node.data.is_bow, node.data.is_eow, node.data.is_whole_word, node.count, node.child_ptr});
-    //     for(word[1..]) |cp|
-    //     {
-    //         const cc: CharCode = self.settings.codepoint_to_charcode(cp) catch return;
-    //         node = self.find_node_ptr(node, cc) orelse return;
-    //         print("PATH   : {c} is_bow: {} is_eow: {} is_whole: {} childcount: {} childptr: {}\n", .{cp, node.data.is_bow, node.data.is_eow, node.data.is_whole_word, node.count, node.child_ptr});
-    //     }
-    // }
-
-    // pub fn find_raw_word(self: *Graph, word: []const u8) ?*Node
-    // {
-    //     if (word.len == 0) return null;
-    //     const fc: CharCode = self.settings.codepoint_to_charcode(word[0]) catch return null;
-    //     var node = self.find_node_ptr(self.get_rootnode_ptr(), fc) orelse return null;
-    //     for(word[1..]) |cp|
-    //     {
-    //         const cc: CharCode = self.settings.codepoint_to_charcode(cp) catch return null;
-    //         node = self.find_node_ptr(node, cc) orelse return null;
-    //     }
-    //     return node;
-    // }
-
-
-    // pub fn find_raw(self: *Graph, charcodes: []const CharCode) ?*Node
-    // {
-    //     var node = self.get_rootnode_ptr();
-    //     if (node.count == 0) return null;// or !parentnode.mask.isSet(charcode)) return null;
-    //     for (charcodes) |cc|
-    //     {
-    //         node = self.find_node_ptr(node, cc) orelse return null;
-    //     }
-    //     return node;
-    // }
-
-
-
-    // fn find_node_ptr_by_mask(self: *Graph, parentnode: *Node, charcode: CharCode) ?*Node
-    // {
-    //     const charcode_mask = get_mask(charcode);
-    //     if (parentnode.mask & charcode_mask == 0) return null;
-    //     const m = parentnode.mask & get_mask(charcode);
-    //     if (m == 0) return null;
-    //     const index = @popCount(parentnode.mask & (charcode_mask -% 1));
-    //     return &self.nodes.items[parentnode.child_ptr + index];
-    // }

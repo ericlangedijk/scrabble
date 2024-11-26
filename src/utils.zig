@@ -38,6 +38,7 @@ pub fn get_coord_name(square: scrabble.Square) ![]const u8
 
 pub fn printboard(board: *const scrabble.Board, settings: *const scrabble.Settings) void
 {
+    std.debug.print("\n", .{});
     //for (scrabble.Board.ALL_SQUARES) |q| std.debug.print("{}\n", .{q});
     for (scrabble.Board.ALL_SQUARES) |q|
     {
@@ -48,13 +49,11 @@ pub fn printboard(board: *const scrabble.Board, settings: *const scrabble.Settin
         std.debug.print("{c} ", .{char});
         if (x == 14) std.debug.print("\n", .{});
     }
-    std.debug.print("\n", .{});
 
     //std.debug.print("\x1b[34mThis is blue text\x1b[0m\n", .{}); // Blue text
 }
 
-
-pub fn printmove(board: *const scrabble.Board, move: *const scrabble.Move, settings: *const scrabble.Settings) void
+pub fn printmove(board: *const scrabble.Board, move: *const scrabble.Move, settings: *const scrabble.Settings, rack: ?scrabble.Rack) void
 {
     //for (scrabble.Board.ALL_SQUARES) |q| std.debug.print("{}\n", .{q});
     std.debug.print("\n", .{});
@@ -79,14 +78,29 @@ pub fn printmove(board: *const scrabble.Board, move: *const scrabble.Move, setti
         }
         if (x == 14) std.debug.print("\n", .{});
     }
-    std.debug.print("len {} anchor {} score {}", .{move.letters.len, move.anchor, move.score});
+    if (rack) |r| print_rack(r, settings);
+    std.debug.print("move: len {} anchor {} score {}\n", .{move.letters.len, move.anchor, move.score});
     //std.debug.print("\x1b[34mThis is blue text\x1b[0m\n", .{}); // Blue text
 }
+
+pub fn print_rack(rack: scrabble.Rack, settings: *const scrabble.Settings) void
+    {
+        std.debug.print("rack: ", .{});
+        for (rack.letters.slice()) |rackletter|
+        {
+            std.debug.print("{c}", .{settings.code_to_char(rackletter)});
+        }
+        for (0..rack.blanks) |_|
+        {
+            std.debug.print("*", .{});
+        }
+        std.debug.print("\n", .{});
+    }
 
 
     // std.debug.print("\x1b[31mThis is red text\x1b[0m\n", .{}); // Red text
     // std.debug.print("\x1b[32mThis is green text\x1b[0m\n", .{}); // Green text
-        // std.debug.print("\x1b[34mThis is blue text\x1b[0m\n", .{}); // Blue text
+    // std.debug.print("\x1b[34mThis is blue text\x1b[0m\n", .{}); // Blue text
 
 // pub fn get_coord_name(square: scrabble.Square) []const u8
 // {

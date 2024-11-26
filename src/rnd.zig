@@ -1,21 +1,21 @@
 const std = @import("std");
 
-pub const Rnd = struct
+pub const Random = struct
 {
     const OFFSET: u64 = 0x7f7110ba7879ea6a;
     seed: u64,
 
-    pub fn init(seed: u64) Rnd
+    pub fn init(seed: u64) Random
     {
-        return Rnd
+        return Random
         {
             .seed = OFFSET *% seed,
         };
     }
 
-    pub fn init_randomized() Rnd
+    pub fn init_randomized() Random
     {
-        return Rnd
+        return Random
         {
             .seed = OFFSET *% generate_timeseed(),
         };
@@ -28,12 +28,12 @@ pub const Rnd = struct
         return u;
     }
 
-    pub fn reset_seed(self: *Rnd, seed: u64) void
+    pub fn reset_seed(self: *Random, seed: u64) void
     {
         self.seed = OFFSET *% seed;
     }
 
-    pub fn next_u64(self: *Rnd) u64
+    pub fn next_u64(self: *Random) u64
     {
         self.seed = self.seed +% 0x9e3779b97f4a7c15;
         var z: u64 = self.seed;
@@ -43,7 +43,7 @@ pub const Rnd = struct
         return z;
     }
 
-    pub fn next_u32(self: *Rnd) u32
+    pub fn next_u32(self: *Random) u32
     {
         const n: u64 = self.next_u64();
         const a: u32 = @truncate(n);
@@ -51,7 +51,7 @@ pub const Rnd = struct
         return a ^ b;
     }
 
-    pub fn next_u64_range(self: *Rnd, min: u64, max: u64) u64
+    pub fn next_u64_range(self: *Random, min: u64, max: u64) u64
     {
         if (max > min)
         {

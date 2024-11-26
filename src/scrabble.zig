@@ -2,6 +2,16 @@
 
 // TODO: put in asserts for max values etc.
 
+/// experimental comptime struct
+const Sizes = struct
+{
+    unique_letter_count: u8, // max 63
+    rack_count: u8, // max 8
+    board_width: u8, // max 21
+    board_height: u8, // max 21
+};
+
+//pub var CALLS: u64 = 0;
 
 // Dutch (26): ABCDEFGHIJKLMNOPQRSTUVWXYZ
 // English (26): ABCDEFGHIJKLMNOPQRSTUVWXYZ
@@ -78,27 +88,18 @@ pub const Language = enum
     // quite a few here...
 };
 
-// comptime / monomorphization
-pub const Consts = struct
-{
-    // max number of letters on rack
-    // board width
-    // board height
-    // BWV en BLV?
-};
-
 pub const Settings = struct
 {
     /// Our char table will look like this:\
     /// `0 a b c d`...\
     /// `0 1 2 3 4`...
-    codes: [256]CharCode = std.mem.zeroes([256]CharCode), // = [_]CharCode ** 512,
-
+    codes: [256]CharCode = std.mem.zeroes([256]CharCode), // TODO: make hashmap if too big
     /// `0 1 2 3 4`...\
     /// `0 a b c d`...
-    unicode_chars: [32]Char = std.mem.zeroes([32]Char),
-
-    values: [32]u8 = std.mem.zeroes([32]u8),
+    unicode_chars: [32]Char = std.mem.zeroes([32]Char), // TODO: make bigger if needed -> this has impact on the whole system
+    values: [32]u8 = std.mem.zeroes([32]u8), // TODO: make bigger if needed -> this has impact on the whole system
+    distribution: [32]u8 = std.mem.zeroes([32]u8), // TODO: index #0 is abused for the number of blanks.
+    blanks: u8 = 0,
 
     pub fn init(language: Language) !Settings
     {
@@ -111,7 +112,6 @@ pub const Settings = struct
         assert(def.unique_letters.len == def.values.len);
         assert(def.unique_letters.len == def.distribution.len);
 
-        //const def: *const LocalDef = &DutchDef;
         var result = Settings {};
 
         var code: CharCode = 1;
@@ -121,10 +121,10 @@ pub const Settings = struct
             result.codes[cc] = code;
             result.unicode_chars[code] = cc;
             result.values[code] = value;
-            _ = amount;
+            result.distribution[code] = amount;
             code += 1;
         }
-        //std.debug.print("{any}\n", .{result});
+        result.blanks = def.blanks;
         return result;
     }
 
@@ -163,10 +163,10 @@ pub const Settings = struct
 
     pub fn check_unicode_char_supported(c: u21) !void
     {
-        //if (std.unicode.)
         if (!is_supported_unicode_char(c))
         {
-            std.debug.print("INVALID CHAR {}", .{c});
+            set_last_error("invalid char encountered");
+            //std.debug.print("INVALID CHAR {}", .{c});
             return ScrabbleError.UnsupportedCharacter;
         }
     }
@@ -183,7 +183,7 @@ const LocalDef = struct
     unique_letters: []const u8,
     /// The value of each tile
     values: []const u8,
-    /// The amount of each tile
+    /// The amounts of each tile
     distribution: []const u8,
     /// The number of blanks
     blanks: u8,
@@ -205,21 +205,13 @@ const EnglishDef: LocalDef = LocalDef
     .blanks = 2,
 };
 
-const Tile = struct
-{
-    character: Char,
-    code: CharCode,
-    value: Value,
-};
-
-/// For Board and Move
+/// Core letter
 pub const Letter = packed struct
 {
     const EMPTY: Letter = Letter.init(0, false);
 
     charcode: CharCode = 0,
     is_blank: bool = false,
-    // we could contemplate adding some crazy helping flags here
 
     pub fn init(charcode: CharCode, comptime is_blank: bool) Letter
     {
@@ -251,7 +243,7 @@ pub const Letter = packed struct
 pub const MoveLetter = packed struct
 {
     letter: Letter,
-    square: Square = 0, // 9 bits
+    square: Square = 0,
 
     pub fn init(cc: CharCode, is_blank: bool, square: Square) MoveLetter
     {
@@ -263,12 +255,13 @@ pub const MoveLetter = packed struct
     }
 };
 
+/// TODO: asserts on max 7 including blanks.
 pub const Rack = struct
 {
     pub const EMPTY = Rack.init();
 
     letters: std.BoundedArray(CharCode, 7),
-    blanks: u3, // max blanks = 7
+    blanks: u3,
 
     pub fn init() Rack
     {
@@ -287,6 +280,11 @@ pub const Rack = struct
         return rack;
     }
 
+    pub fn count(self: *const Rack) u8
+    {
+        return self.letters.len + self.blanks;
+    }
+
     pub fn add(self: *Rack, cc: CharCode) void
     {
         self.letters.appendAssumeCapacity(cc);
@@ -298,13 +296,18 @@ pub const Rack = struct
         self.letters.appendAssumeCapacity(cc);
     }
 
+    pub fn add_letter(self: *Rack, letter: Letter) void
+    {
+        if (letter.is_blank) self.blanks += 1 else self.add(letter.charcode);
+    }
+
     pub fn remove(self: *Rack, idx: usize) void
     {
         assert(self.letters.len > idx);
-        self.letters.swapRemove(idx);
+        _ = self.letters.swapRemove(idx);
     }
 
-    /// return new rack
+    /// Return new rack. used by engine
     pub fn removed(self: Rack, idx: usize) Rack
     {
         assert(self.letters.len > idx);
@@ -313,13 +316,32 @@ pub const Rack = struct
         return rack;
     }
 
-    /// return new rack
+    /// Return new rack. used by engine
     pub fn removed_blank(self: Rack) Rack
     {
         assert(self.blanks > 0);
         var rack = self;
         rack.blanks -= 1;
         return rack;
+    }
+
+    pub fn remove_letter(self: *Rack, moveletter: MoveLetter) void
+    {
+        if (moveletter.letter.is_blank)
+        {
+            self.blanks -= 1;
+        }
+        else
+        {
+            for (self.letters.slice(), 0..) |rackletter, idx|
+            {
+                if (rackletter == moveletter.letter.charcode)
+                {
+                    self.remove(idx);
+                    break;
+                }
+            }
+        }
     }
 };
 
@@ -338,6 +360,7 @@ pub const Move = struct
     score: u16 = 0,
     /// The anchor of the move is (1) an eow board letter or (2) an empty square when generated as crossword.
     anchor: Square = 0,
+    /// Some info flags.
     flags: Flags = Flags {},
 
     pub fn init() Move
@@ -467,8 +490,18 @@ pub const Move = struct
 
 pub const Bag = struct
 {
-    available: std.BoundedArray(u8, 32) = .{},
+    /// We want to abuse index #0 for the blanks count.
+    available: [32]u8 = std.mem.zeroes([32]u8),
     blanks: u8 = 0,
+
+    pub fn init(settings: *const Settings) Bag
+    {
+        return Bag
+        {
+            .available = settings.distribution,
+            .blanks = settings.blanks,
+        };
+    }
 
     pub fn init_empty() Bag
     {
@@ -480,20 +513,61 @@ pub const Bag = struct
         self.available[charcode] += 1;
     }
 
-    pub fn to_string(self: *const Bag) std.BoundedArray(CharCode, 256)
+    pub fn get_count(self: *const Bag) u32
     {
-        const result: std.BoundedArray(CharCode, 256) = .{};
-        for(self.available.slice(), 0..) |avail, idx|
+        var result: u32 = self.blanks;
+        for(self.available) |a| result += a;
+        return result;
+    }
+
+    pub fn to_string(self: *const Bag) std.BoundedArray(Letter, 256)
+    {
+        var result: std.BoundedArray(Letter, 256) = .{};
+        for(self.available, 0..) |avail, idx|
         {
+            if (avail == 0) continue;
             const charcode: CharCode = @intCast(idx);
             const count: u8 = avail;
             for (0..count) |_|
             {
-                result.appendAssumeCapacity(charcode);
+                result.appendAssumeCapacity(Letter.init(charcode, false));
             }
+        }
+        for (0..self.blanks) |_|
+        {
+            result.appendAssumeCapacity(Letter.init(0, true));
         }
         return result;
     }
+
+    pub fn remove_letter(self: *Bag, letter: Letter) void
+    {
+        if (letter.is_blank)
+        {
+            assert(self.blanks > 0);
+            self.blanks -= 1;
+        }
+        else
+        {
+            assert(self.available[letter.charcode] > 0);
+            self.available[letter.charcode] -= 1;
+        }
+    }
+
+    // pub fn pick(self: *Bag, idx: usize) usize
+    // {
+    //     var cumulative: usize = 0;
+    //     for (self.available, 0..) |count, i|
+    //     {
+    //         cumulative += count;
+    //         if (idx < cumulative)
+    //         {
+    //             return i; // Found the letter corresponding to the index
+    //         }
+    //     }
+    //     unreachable; // Should never happen if index < total count
+    // }
+
 };
 
 pub const Dim = struct
@@ -506,11 +580,6 @@ pub const Dim = struct
 pub const DIM: Dim = Dim {.width = 15, .height = 15 };
 
 
-pub fn Brd(comptime width: u9, comptime height: u8) void
-{
-    _ = width;
-    _ = height;
-}
 
 /// Fixed standard 15 x 15 scrabble board.
 pub const Board = struct
@@ -583,7 +652,6 @@ pub const Board = struct
         {
             .settings = settings,
             .squares = std.mem.zeroes([LEN]Letter),
-            //.squares = try allocator.alloc(BoardLetter, 225),
         };
     }
 
@@ -603,25 +671,20 @@ pub const Board = struct
         self.squares[q] = Letter.normal(charcode);
     }
 
+    pub fn set_moveletter(self: *Board, moveletter: MoveLetter) void
+    {
+        self.squares[moveletter.square] = moveletter.letter;
+    }
+
     pub fn is_start_position(self: *const Board) bool
     {
         return self.is_empty(STARTSQUARE);
     }
 
-    // pub fn next_square(self: *const Board, q: Square, comptime orientation: Orientation) ?Square
-    // {
-    //     _ = self;
-    //     return if (square_has_next(q, orientation, .Forwards)) q + 1 else q + Board.WIDTH;
-    // }
-
-    // pub fn get_delta(self: *const Board, comptime orientation: Orientation) u9
-    // {
-    //     return if (Orientation == .Horizontal) 1 else 15;
-    // }
-
     /// True if square has no occupied neighbour or at border.
     pub fn is_next_free(self: *const Board, q: Square, comptime orientation: Orientation, comptime direction: Direction) bool
     {
+        //CALLS += 1;
         return if(next_square(q, orientation, direction)) |t| self.is_empty(t) else true;
     }
 
@@ -818,6 +881,7 @@ pub fn square_has_next(q: Square, comptime ori: Orientation, comptime dir: Direc
 
 pub fn next_square(q: Square, comptime orientation: Orientation, comptime direction: Direction) ?Square
 {
+    //CALLS += 1;
     switch (orientation)
     {
         .Horizontal =>
@@ -840,19 +904,10 @@ pub fn next_square(q: Square, comptime orientation: Orientation, comptime direct
     }
 }
 
-pub const ScrabbleError = error
-{
-    UnsupportedLanguage,
-    UnsupportedCharacter,
-    GaddagBuildError,
-    GaddagValidationFailed,
-};
-
 /// TODO: try to rewrite it so that it does not matter if the move is alreay on the board or not.
 /// Move must be sorted by square and legal.
-/// TODO: maybe add comptime is_first_move so that we do not have to check boardletters in that case.
-///       check move is sorted (or do that outside)
-pub fn calculate_score(settings: *const Settings, board: *const Board, move: Move, comptime orientation: Orientation) u16
+/// TODO: check move is sorted (or do that outside)
+pub fn calculate_score(settings: *const Settings, board: *const Board, move: *const Move, comptime orientation: Orientation) u16
 {
     if (move.letters.len == 0) return 0;
     const opp: Orientation = orientation.opp();
@@ -907,7 +962,7 @@ pub fn calculate_score(settings: *const Settings, board: *const Board, move: Mov
     return @truncate(score);
 }
 
-pub fn calculate_score_on_empty_board(settings: *const Settings, move: Move) u16
+pub fn calculate_score_on_empty_board(settings: *const Settings, move: *const Move) u16
 {
     if (move.letters.len == 0) return 0;
     var word_mul: u32 = 1;
@@ -926,3 +981,27 @@ pub fn calculate_score_on_empty_board(settings: *const Settings, move: Move) u16
     if (move.letters.len == 7) score += 50;
     return @truncate(score);
 }
+
+var last_error: std.BoundedArray(u8, 256) = .{};
+
+pub fn set_last_error(message: []const u8) void
+{
+    const len = @min(256, message.len);
+    last_error.len = 0;
+    last_error.appendSliceAssumeCapacity(message[0..len]);
+}
+
+pub fn get_last_error() []const u8
+{
+    return last_error.slice();
+}
+
+pub const ScrabbleError = error
+{
+    UnsupportedLanguage,
+    UnsupportedCharacter,
+    GaddagBuildError,
+    GaddagValidationFailed,
+    TestError,
+};
+
