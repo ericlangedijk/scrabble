@@ -8,8 +8,8 @@ const assert = std.debug.assert;
 const print = std.debug.print;
 
 const utils =  @import("utils.zig");
-const scrabble =  @import("scrabble.zig");
 
+const scrabble =  @import("scrabble.zig");
 const ScrabbleError = scrabble.ScrabbleError;
 const Char = scrabble.Char;
 const CharCode = scrabble.CharCode;
@@ -42,6 +42,7 @@ pub fn load_graph_from_text_file(filename: []const u8, allocator: std.mem.Alloca
     var it = std.mem.splitAny(u8, file_buffer, &.{13, 10}); // TODO: make a byte + unicode version depending on settings.
     while (it.next()) |word|
     {
+        //std.debug.print("[{s}]\n", .{word});
         if (word.len == 0) continue; // skip empty (split any is a bit strange)
         try graph.add_word(word); // TODO: just skip invalid words
     }
@@ -62,7 +63,7 @@ pub fn load_graph_from_text_file(filename: []const u8, allocator: std.mem.Alloca
         if (word.len == 0) continue;
         if (!graph.word_exists(word))
         {
-            print("word not found {s}", .{word});
+            print("word not found {s}\n", .{word});
             break;
         }
         found += 1;
@@ -367,6 +368,11 @@ pub const Graph = struct
         return self.find_word(word) != null;
     }
 
+    pub fn encoded_word_exists(self: *const Graph, encoded_word: []const CharCode) bool
+    {
+        return self.find_encoded_word(encoded_word) != null;
+    }
+
     fn find_word(self: *const Graph, word: []const u8) ?*const Node
     {
         if (word.len == 0) return null;
@@ -381,17 +387,30 @@ pub const Graph = struct
         return if (node.data.is_eow) node else null;
     }
 
+    fn find_encoded_word(self: *const Graph, word: []const CharCode) ?*const Node
+    {
+        if (word.len == 0) return null;
+        const fc: CharCode = word[0];
+        var node: *const Node = self.find_node(self.get_rootnode(), fc) orelse return null;
+        node = self.get_bow(node) orelse return null;
+        for(word[1..]) |cc|
+        {
+            node = self.find_node(node, cc) orelse return null;
+        }
+        return if (node.data.is_eow) node else null;
+    }
+
     /// private
+    /// TODO: allow one-letter words to be a whole word.
     fn add_word(self: *Graph, word: []const u8) !void
     {
         self.word_count += 1; // TODO: we are not 100% sure, the word could be a duplicate
 
-        const buf = try self.encode_word(word);
-        const word_len: usize = word.len;
-        var prefix = try std.BoundedArray(CharCode, 32).init(0);
-
-
-        //std.debug.print("{s}\n", .{word});
+        const buf = self.settings.encode_word(word) catch return;// catch { std.debug.print("WTF [{s}]\n", .{word}); return; };
+        const word_len: usize = buf.len;
+        // var prefix = try std.BoundedArray(CharCode, 32).init(0);
+        var prefix: std.BoundedArray(CharCode, 32) = .{};
+        //std.debug.print("\nadd: [{s}]\n", .{word});
 
         for (0..word_len) |i|
         {
@@ -400,11 +419,11 @@ pub const Graph = struct
             prefix.appendSliceAssumeCapacity(buf.slice()[0..i + 1]);
             std.mem.reverse(CharCode, prefix.slice());
 
-            // for(prefix.slice()) |c|
-            // {
-            //     std.debug.print("{c}/", .{self.settings.code_to_char(c)});
-            // }
-            // std.debug.print("\n", .{});
+            //  for(prefix.slice()) |c|
+            //  {
+            //      std.debug.print("{u}/", .{self.settings.decode(c)});
+            //  }
+             //std.debug.print("\n", .{});
 
             var node: *Node = self.get_rootnode_ptr();
             for (0..prefix.len) |j|
@@ -422,35 +441,26 @@ pub const Graph = struct
                         node.data.is_bow = true;
                         bow_node = try self.add_node(node, 0, true); // add begin-of-word node (always index #0)
                         //assert(self.get_bow_ptr(node) == bow_node);
-                        //std.debug.print("+\n", .{});
+                        //std.debug.print("(+bow)+", .{});
                     }
 
                     // Switch to bow and add suffix.
                     var suffix = bow_node orelse return ScrabbleError.GaddagBuildError;
+                    // I think this allows for 1-letter words.
+                    if (word_len == 1) suffix.data.is_eow = true;
                     for (j + 1..word_len) |k|
                     {
                         suffix = try self.add_or_get_node(suffix, buf.get(k), false);
-                        //std.debug.print("{c}\\", .{self.settings.code_to_char(suffix.data.code)});
+                        //std.debug.print("{u}\\", .{self.settings.decode(suffix.data.code)});
                         if (k == word_len - 1)
                         {
                             suffix.data.is_eow = true; // mark end of word
-                            //std.debug.print("EOW\n", .{});
+                            //std.debug.print("(eow)\n", .{});
                         }
                     }
                 }
             }
         }
-    }
-
-    /// private
-    fn encode_word(self: *Graph, word: []const u8) !std.BoundedArray(CharCode, 32)
-    {
-        var buf = try std.BoundedArray(CharCode, 32).init(0);
-        for (word) |u|
-        {
-            buf.appendAssumeCapacity(try self.settings.encode(u));
-        }
-        return buf;
     }
 
     /// private
@@ -565,7 +575,7 @@ pub const Graph = struct
 };
 
 
-/// 10 bytes with mask. 6 byte without mask. TODO: we could squeeze 6 into 5 if we limit to 65 million nodes.
+/// 10 bytes with mask. TODO: we could squeeze 6 into 5 if we limit to 65 million nodes.
 pub const Node = extern struct
 {
     pub const STRUCTSIZE: usize = @sizeOf(Node);

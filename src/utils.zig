@@ -36,7 +36,7 @@ pub fn get_coord_name(square: scrabble.Square) ![]const u8
 }
 
 
-pub fn printboard(board: *const scrabble.Board, settings: *const scrabble.Settings) void
+pub fn printboard(board: *const scrabble.Board) void
 {
     std.debug.print("\n", .{});
     //for (scrabble.Board.ALL_SQUARES) |q| std.debug.print("{}\n", .{q});
@@ -44,7 +44,7 @@ pub fn printboard(board: *const scrabble.Board, settings: *const scrabble.Settin
     {
         const x = scrabble.square_x(q);
         //const y = scrabble.square_y(q);
-        var char: scrabble.Char = settings.decode(board.squares[q].charcode);
+        var char: scrabble.Char = board.settings.decode(board.squares[q].charcode);
         if (char == 0) char = '.';
         std.debug.print("{u} ", .{char});
         if (x == 14) std.debug.print("\n", .{});
@@ -53,7 +53,7 @@ pub fn printboard(board: *const scrabble.Board, settings: *const scrabble.Settin
     //std.debug.print("\x1b[34mThis is blue text\x1b[0m\n", .{}); // Blue text
 }
 
-pub fn printmove(board: *const scrabble.Board, move: *const scrabble.Move, settings: *const scrabble.Settings, rack: ?scrabble.Rack) void
+pub fn printmove(board: *const scrabble.Board, move: *const scrabble.Move, rack: ?scrabble.Rack) void
 {
     //for (scrabble.Board.ALL_SQUARES) |q| std.debug.print("{}\n", .{q});
     std.debug.print("\n", .{});
@@ -64,7 +64,7 @@ pub fn printmove(board: *const scrabble.Board, move: *const scrabble.Move, setti
 
         if (move.find(q)) |L|
         {
-            const char: scrabble.Char = settings.decode(L.charcode);
+            const char: scrabble.Char = board.settings.decode(L.charcode);
             if (L.is_blank)
                 std.debug.print("\x1b[31m{u} \x1b[0m", .{char})
             else
@@ -72,13 +72,13 @@ pub fn printmove(board: *const scrabble.Board, move: *const scrabble.Move, setti
         }
         else
         {
-            var char = settings.decode(board.squares[q].charcode);
+            var char = board.settings.decode(board.squares[q].charcode);
             if (char == 0) char = '.';
             std.debug.print("{u} ", .{char});
         }
         if (x == 14) std.debug.print("\n", .{});
     }
-    if (rack) |r| print_rack(r, settings);
+    if (rack) |r| print_rack(r, board.settings);
     std.debug.print("move: len {} anchor {} score {}\n", .{move.letters.len, move.anchor, move.score});
     //std.debug.print("\x1b[34mThis is blue text\x1b[0m\n", .{}); // Blue text
 }
@@ -94,7 +94,7 @@ pub fn printmove_only(move: *const scrabble.Move, settings: *const scrabble.Sett
         else
             std.debug.print("{u} {}/ ", .{char, moveletter.square});
     }
-    std.debug.print("\n", .{});
+    std.debug.print(" {} is_crossgen {} is_horzgen {}\n", .{move.anchor, move.flags.is_crossword_generated, move.flags.is_horizontally_generated});
 }
 
 pub fn print_rack(rack: scrabble.Rack, settings: *const scrabble.Settings) void
@@ -122,6 +122,16 @@ pub fn print_bag(bag: *const scrabble.Bag, settings: *const scrabble.Settings) v
     std.debug.print("\n", .{});
 
 }
+
+pub fn print_encoded_word(encoded_word: []const scrabble.CharCode, settings: *const scrabble.Settings) !void
+{
+    for (encoded_word) |cc|
+    {
+        std.debug.print("{u}", .{settings.decode(cc)});
+    }
+    std.debug.print("\n", .{});
+}
+
     // std.debug.print("\x1b[31mThis is red text\x1b[0m\n", .{}); // Red text
     // std.debug.print("\x1b[32mThis is green text\x1b[0m\n", .{}); // Green text
     // std.debug.print("\x1b[34mThis is blue text\x1b[0m\n", .{}); // Blue text

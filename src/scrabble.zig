@@ -96,6 +96,7 @@ pub const Language = enum
 {
     Dutch,
     English,
+    Slovenian,
     // quite a few here...
 };
 
@@ -128,6 +129,7 @@ pub const Settings = struct
         {
             .Dutch => &DutchDef,
             .English => &EnglishDef,
+            .Slovenian => &SlovenianDef,
         };
 
         assert(def.unique_letters.len == def.values.len);
@@ -171,12 +173,50 @@ pub const Settings = struct
 
     pub fn encode(self: *const Settings, u: Char) !CharCode
     {
-        return self.map.get(u) orelse ScrabbleError.CharacterNotFound;
+        return self.map.get(u) orelse
+        {
+            //std.debug.print("{u} {}", .{ u, u });
+            return ScrabbleError.CharacterNotFound;
+        };
     }
 
     pub fn decode(self: *const Settings, c: CharCode) Char
     {
         return self.chars[c];
+    }
+
+    pub fn encode_word(self: *const Settings, word: []const u8) !std.BoundedArray(CharCode, 32)
+    {
+        if (!self.has_unicode) return self.encode_ascii_word(word) else return try self.encode_unicode_word(word);
+    }
+
+    /// private
+    fn encode_ascii_word(self: *const Settings, word: []const u8) !std.BoundedArray(CharCode, 32)
+    {
+        var buf = try std.BoundedArray(CharCode, 32).init(0);
+        for (word) |u|
+        {
+            const charcode = try self.encode(u);
+            if (buf.len > 31) return ScrabbleError.WordTooLong;
+            buf.appendAssumeCapacity(charcode);
+        }
+        return buf;
+    }
+
+    /// private
+    fn encode_unicode_word(self: *const Settings, word: []const u8) !std.BoundedArray(CharCode, 32)
+    {
+        var buf: std.BoundedArray(CharCode, 32) = .{};
+        const view: std.unicode.Utf8View = try std.unicode.Utf8View.init(word);
+        var iter = view.iterator();
+        while (iter.nextCodepoint()) |u|
+        {
+            const charcode = try self.encode(u);
+            if (buf.len > 31) return ScrabbleError.WordTooLong;
+//                for (buf.slice()) |c| std.debug.print("{}={u}", .{u, self.decode(c)});
+            buf.appendAssumeCapacity(charcode);
+        }
+        return buf;
     }
 
     pub fn lv(self: *const Settings, letter: Letter) u8
@@ -295,6 +335,12 @@ pub const Rack = struct
             rack.add(cc);
         }
         return rack;
+    }
+
+    pub fn clear(self: *Rack) void
+    {
+        self.letters.len = 0;
+        self.blanks = 0;
     }
 
     pub fn count(self: *const Rack) u8
@@ -521,7 +567,7 @@ pub const Move = struct
 pub const Bag = struct
 {
     /// All letters in here, including the blanks.
-    str: std.BoundedArray(Letter, 256),
+    str: std.BoundedArray(Letter, 256), // TODO: keep a default bag in settings to copy?
 
     pub fn init(settings: *const Settings) Bag
     {
@@ -534,6 +580,11 @@ pub const Bag = struct
     pub fn init_empty() Bag
     {
         return Bag {};
+    }
+
+    pub fn reset(self: *Bag, settings: *const Settings) void
+    {
+        self.str = to_str(settings);
     }
 
     fn to_str(settings: *const Settings) std.BoundedArray(Letter, 256)
@@ -584,10 +635,6 @@ pub const Board = struct
         }
         break :blk temp;
     };
-
-    //pub const ALL_SQUARES
-
-    //pub const ALLSQUARES: [LEN]Square =
 
     /// Board word values.
     pub const BWV: [LEN]u8 =
@@ -641,6 +688,12 @@ pub const Board = struct
         };
     }
 
+    pub fn clear(self: *Board) void
+    {
+        self.squares = std.mem.zeroes([LEN]Letter);
+    }
+
+
     pub fn get_ptr(self: *Board, q: Square) *Letter
     {
         return &self.squares[q];
@@ -674,31 +727,33 @@ pub const Board = struct
         return if(next_square(q, orientation, direction)) |t| self.is_empty(t) else true;
     }
 
-    /// TODO write function returning ?BoardLetter otherwise we fetch the letter 2 or 3 times.
-    pub fn is_bow(self: *const Board, q: Square, comptime orientation: Orientation) bool
+    pub fn is_bow(self: *const Board, q: Square, comptime ori: Orientation) bool
     {
-        return self.is_filled(q) and self.is_next_free(q, orientation, .Backwards);
+        return self.is_filled(q) and self.is_next_free(q, ori, .Backwards);
     }
 
-    pub fn get_bow(self: *const Board, q: Square, comptime orientation: Orientation) ?Letter
-    {
-        const boardletter = self.squares[q];
-        if (boardletter.is_filled() and self.is_next_free(q, orientation, .Backwards))
-        {
-            return boardletter;
-        }
-        return null;
-    }
+    // pub fn get_bow(self: *const Board, q: Square, comptime orientation: Orientation) ?Letter
+    // {
+    //     const boardletter = self.squares[q];
+    //     if (boardletter.is_filled() and self.is_next_free(q, orientation, .Backwards))
+    //     {
+    //         return boardletter;
+    //     }
+    //     return null;
+    // }
 
     pub fn is_eow(self: *const Board, q: Square, comptime orientation: Orientation) bool
     {
         return self.is_filled(q) and self.is_next_free(q, orientation, .Forwards);
     }
 
+    /// A little bit engine specific, but anyway...
     pub fn is_crossword_anchor(self: *const Board, q: Square, comptime ori: Orientation) bool
     {
         const opp = ori.opp();
-        if (!self.is_empty(q)) return false;
+        if (self.is_filled(q)) return false;
+        if (self.has_filled_neighbour(q, ori, .Backwards)) return false;
+        if (self.has_filled_neighbour(q, ori, .Forwards)) return false;
         if (self.has_filled_neighbour(q, opp, .Backwards)) return true;
         if (self.has_filled_neighbour(q, opp, .Forwards)) return true;
         return false;
@@ -719,7 +774,7 @@ pub const Board = struct
     /// TODO: write get_letter which returns null if empty (for engine)
     pub fn is_filled(self: *const Board, q: Square) bool
     {
-        return !self.squares[q].is_empty();
+        return self.squares[q].is_filled();
     }
 
     pub fn get_letter(self: *const Board, square: Square) ?Letter
@@ -743,6 +798,11 @@ pub const Board = struct
         }
     }
     //pub fn scan
+
+    // pub fn get_x(self: *const Board, q: Square) u9
+    // {
+    //     return q % Board.WIDTH;
+    // }
 
     /// TODO for scanning we could also have reversed mem slices etc.
     pub fn letter_iterator(self: *const Board, square: Square, comptime ori: Orientation, comptime dir: Direction, comptime inclusive: bool) BoardLetterIterator(ori, dir, inclusive)
@@ -876,7 +936,6 @@ pub fn square_has_next(q: Square, comptime ori: Orientation, comptime dir: Direc
 
 pub fn next_square(q: Square, comptime orientation: Orientation, comptime direction: Direction) ?Square
 {
-    //CALLS += 1;
     switch (orientation)
     {
         .Horizontal =>
@@ -909,6 +968,7 @@ pub fn calculate_score(settings: *const Settings, board: *const Board, move: *co
     const delta: u9 = orientation.delta(DIM);
     const my_first_square: Square = move.first().square;
     const my_last_square: Square = move.last().square;
+    const bonus: u32 = if (move.letters.len == 7) 50 else 0;
     var word_mul: u32 = 1;
     var my_score: u32 = 0;
     var cross_score: u32 = 0;
@@ -953,10 +1013,7 @@ pub fn calculate_score(settings: *const Settings, board: *const Board, move: *co
         }
         q += delta;
     }
-
-    var score = word_mul * my_score + cross_score;
-    if (move.letters.len == 7) score += 50;
-    return @truncate(score);
+    return @truncate(word_mul * my_score + cross_score + bonus);
 }
 
 pub fn calculate_score_on_empty_board(settings: *const Settings, move: *const Move) u16
@@ -979,6 +1036,55 @@ pub fn calculate_score_on_empty_board(settings: *const Settings, move: *const Mo
     return @truncate(score);
 }
 
+const gaddag = @import("gaddag.zig");
+pub fn validate_board(board: *const Board, graph: *const gaddag.Graph) !bool
+{
+    var buf: std.BoundedArray(CharCode, 32) = .{};
+    for (Board.ALL_SQUARES) |q|
+    {
+        buf.len = 0;
+        if (board.is_bow(q, .Horizontal))
+        {
+            var iter = board.letter_iterator(q, .Horizontal, .Forwards, true);
+            while (iter.next()) |L| buf.appendAssumeCapacity(L.letter.charcode);
+            if (buf.len > 1)
+            {
+                //try utils.print_encoded_word(buf.slice(), board.settings);
+                //std.debug.print("h ok={}\n", .{graph.encoded_word_exists(buf.slice())});
+                if (!graph.encoded_word_exists(buf.slice()))
+                {
+                    try utils.print_encoded_word(buf.slice(), board.settings);
+                    return false;
+                }
+            }
+        }
+        buf.len = 0;
+    }
+
+
+
+    for (Board.ALL_SQUARES) |q|
+    {
+        buf.len = 0;
+        if (board.is_bow(q, .Vertical))
+        {
+            var iter = board.letter_iterator(q, .Vertical, .Forwards, true);
+            while (iter.next()) |L| buf.appendAssumeCapacity(L.letter.charcode);
+            if (buf.len > 1)
+            {
+            //try utils.print_encoded_word(buf.slice(), board.settings);
+            //std.debug.print("v ok={}\n", .{graph.encoded_word_exists(buf.slice())});
+                if (!graph.encoded_word_exists(buf.slice()))
+                {
+                    try utils.print_encoded_word(buf.slice(), board.settings);
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
 var last_error: std.BoundedArray(u8, 256) = .{};
 
 pub fn set_last_error(message: []const u8) void
@@ -998,7 +1104,116 @@ pub const ScrabbleError = error
     UnsupportedLanguage,
     TooManyCharacters,
     CharacterNotFound,
+    WordTooLong,
     GaddagBuildError,
     GaddagValidationFailed,
 };
 
+
+
+
+    // pub const SquareInfo = struct
+    // {
+    //     const Flags = packed struct
+    //     {
+    //         is_filled: bool = false,
+    //         has_filled_neighbour_horz_backwards: bool = false,
+    //         has_filled_neighbour_horz_forwards: bool = false,
+    //         has_filled_neighbour_vert_backwards: bool = false,
+    //         has_filled_neighbour_vert_forwards: bool = false,
+    //     };
+
+    //     flags: Flags = Flags {},
+
+    //     next_square_horz_backwards: ?Square = null, // initialized once
+    //     next_square_horz_forwards: ?Square = null, // initialized once
+    //     next_square_vert_backwards: ?Square = null, // initialized once
+    //     next_square_vert_forwards: ?Square = null, // initialized once
+
+    //     pub fn is_free(self: *const SquareInfo, comptime ori: Orientation, comptime dir: Direction) bool
+    //     {
+    //         switch (ori)
+    //         {
+    //             .Horizontal =>
+    //             {
+    //                 switch (dir)
+    //                 {
+    //                     .Backwards => return !self.flags.has_filled_neighbour_horz_backwards,
+    //                     .Forwards  => return !self.flags.has_filled_neighbour_horz_forwards,
+    //                 }
+    //             },
+    //             .Vertical =>
+    //             {
+    //                 switch (dir)
+    //                 {
+    //                     .Backwards => return !self.flags.has_filled_neighbour_vert_backwards,
+    //                     .Forwards  => return !self.flags.has_filled_neighbour_vert_forwards,
+    //                 }
+    //             },
+    //         }
+    //     }
+
+    //    pub fn is_bow(self: *const SquareInfo, comptime ori: Orientation) bool
+    //     {
+    //         return self.flags.is_filled and self.is_free(ori, .Backwards);
+    //     }
+
+    //    pub fn is_eow(self: *const SquareInfo, comptime ori: Orientation) bool
+    //     {
+    //         return self.flags.is_filled and self.is_free(ori, .Forwards);
+    //     }
+
+    // };
+
+
+    // fn init_squareinfo() [LEN]SquareInfo
+    // {
+    //     var result: [LEN]SquareInfo = undefined;
+    //     for(ALL_SQUARES) |q|
+    //     {
+    //         //std.debug.print("{}/", .{q});
+    //         const inf: *SquareInfo = &result[q];
+    //         inf.* = SquareInfo {};
+    //         if (square_x(q) > 0) inf.next_square_horz_backwards = q - 1;
+    //         if (square_x(q) < 14) inf.next_square_horz_forwards = q + 1;
+    //         if (square_y(q) > 0) inf.next_square_vert_backwards = q - 15;
+    //         if (square_y(q) < 14) inf.next_square_vert_forwards = q + 15;
+    //     }
+    //     return result;
+    // }
+
+
+    // /// EXPERIMENTAL
+    // pub fn update(self: *Board) void
+    // {
+    //     for (&self.info, 0..) |*a, q|
+    //     {
+    //         const square: Square = @intCast(q);
+    //         a.flags.is_filled = self.squares[square].is_filled();
+
+    //         if (a.next_square_horz_backwards) |n|
+    //         {
+    //             const b: *SquareInfo = &self.info[n];
+    //             a.flags.has_filled_neighbour_horz_backwards = b.flags.is_filled;
+    //             b.flags.has_filled_neighbour_horz_forwards = a.flags.is_filled;
+    //         }
+    //         if (a.next_square_horz_forwards) |n|
+    //         {
+    //             const b: *SquareInfo = &self.info[n];
+    //             a.flags.has_filled_neighbour_horz_forwards = b.flags.is_filled;
+    //             b.flags.has_filled_neighbour_horz_backwards = a.flags.is_filled;
+    //         }
+    //         if (a.next_square_vert_backwards) |n|
+    //         {
+    //             const b: *SquareInfo = &self.info[n];
+    //             a.flags.has_filled_neighbour_vert_backwards = b.flags.is_filled;
+    //             b.flags.has_filled_neighbour_vert_forwards = a.flags.is_filled;
+    //         }
+    //         if (a.next_square_vert_forwards) |n|
+    //         {
+    //             const b: *SquareInfo = &self.info[n];
+    //             a.flags.has_filled_neighbour_vert_forwards = b.flags.is_filled;
+    //             b.flags.has_filled_neighbour_vert_backwards = a.flags.is_filled;
+    //         }
+    //     }
+    // }

@@ -115,18 +115,33 @@ pub const MovGen = struct
                 inf.mark_as_processed(.Horizontal);
                 if (self.movelist.items.len >= MAX_MOVES) return;
             }
+        }
+
+        for (Board.ALL_SQUARES) |square|
+        {
+            const inf: *SquareInfo = &self.squareinfo[square];
             if (board.is_eow(square, .Vertical))
             {
                 self.gen(board, square, root, rack, &Move.init_with_anchor(square), 0, .Vertical, .Backwards);
                 inf.mark_as_processed(.Vertical);
                 if (self.movelist.items.len >= MAX_MOVES) return;
             }
+        }
+
+        for (Board.ALL_SQUARES) |square|
+        {
+            const inf: *SquareInfo = &self.squareinfo[square];
             if (board.is_crossword_anchor(square, .Horizontal))
             {
                 self.gen(board, square, root, rack, &Move.init_with_anchor(square), IS_CROSSGEN, .Horizontal, .Backwards);
                 inf.mark_as_processed_by_crossword(.Horizontal);
                 if (self.movelist.items.len >= MAX_MOVES) return;
             }
+        }
+
+        for (Board.ALL_SQUARES) |square|
+        {
+            const inf: *SquareInfo = &self.squareinfo[square];
             if (board.is_crossword_anchor(square, .Vertical))
             {
                 self.gen(board, square, root, rack, &Move.init_with_anchor(square), IS_CROSSGEN, .Vertical, .Backwards);
@@ -299,21 +314,15 @@ pub const MovGen = struct
 
         if (!is_first_move)
         {
-            // Unfortunately we have to do a little filtering here on duplicate one-letter moves. These are quite rare.
+            // Unfortunately we have to do a little filtering here to prevent duplicate one-letter moves. These are quite rare.
             if (move.letters.len == 1)
             {
                 const first = move.first();
-                //const v: u6 = first.letter.as_u6();
                 const inf = &self.squareinfo[first.square];
                 if (inf.is_one_mask_set(first.letter)) return;
                 inf.mark_one_mask_set(first.letter);
-                //if (inf.one_mask.isSet(v)) return;
-                //inf.one_mask.set(v);
             }
-            //var timer = std.time.Timer.start() catch return;
             storedmove.score = scrabble.calculate_score(self.settings, board, move, ori); // TODO: we spend 1/4 of the time calculating the score
-            //const elapsed = timer.lap();
-            //CALC += elapsed;
         }
         else
         {
@@ -330,7 +339,6 @@ pub const MovGen = struct
     /// in `store_rack_moves` we make clones of each generate move (rotated and shifted) connected to the startsquare.
     fn gen_rack_moves(self: *MovGen, board: *const Board, depth: u8, q: Square, inputnode: ?*const Node, rack: *const Rack, move: Move) void
     {
-        // TODO: not tested if all this is correct.
         const node = inputnode orelse return;
         if (node.count == 0) return;
         const graph = self.graph;
@@ -372,6 +380,7 @@ pub const MovGen = struct
     /// Dedicated routine for rack generated moves, shifting and rotating.
     fn store_rack_moves(self: *MovGen, board: *const Board, move: Move) void
     {
+        // TODO: validate board
         const count = move.count();
         var shifted_move: Move = move;
         shifted_move.set_flags(.Horizontal, false);
@@ -393,7 +402,7 @@ pub const MovGen = struct
 };
 
 
-/// During processing this struct is updated for little speedups.
+/// During processing this struct is updated for speedups, preventing duplicate moves. The functions are just easy-to-read additions.
 pub const SquareInfo = struct
 {
     const EMPTY: SquareInfo = SquareInfo.init_empty();
@@ -412,9 +421,10 @@ pub const SquareInfo = struct
         is_processed_by_crossword: bool = false,
     };
 
+    // Horizontal info
     horz: OrientedInfo,
+    // Vertical info
     vert: OrientedInfo,
-
     /// Cache for one-letter moves, preventing duplicates. Note that it is including the blank, so 64 bits needed.
     one_mask: std.bit_set.IntegerBitSet(64) = EMPTY_ONEMASK,
 
@@ -449,6 +459,15 @@ pub const SquareInfo = struct
         };
     }
 
+    fn mark_as_processed_by_crossword(self: *SquareInfo, comptime ori: Orientation) void
+    {
+        return switch (ori)
+        {
+            .Horizontal => self.horz.is_processed_by_crossword = true,
+            .Vertical => self.vert.is_processed_by_crossword = true,
+        };
+    }
+
     fn is_one_mask_set(self: *const SquareInfo, letter: Letter) bool
     {
         return self.one_mask.isSet(letter.as_u6());
@@ -457,15 +476,6 @@ pub const SquareInfo = struct
     fn mark_one_mask_set(self: *SquareInfo, letter: Letter) void
     {
         self.one_mask.set(letter.as_u6());
-    }
-
-    fn mark_as_processed_by_crossword(self: *SquareInfo, comptime ori: Orientation) void
-    {
-        return switch (ori)
-        {
-            .Horizontal => self.horz.is_processed_by_crossword = true,
-            .Vertical => self.vert.is_processed_by_crossword = true,
-        };
     }
 
     fn get_excluded_mask(self: *const SquareInfo, comptime ori: Orientation) CharCodeMask

@@ -40,7 +40,7 @@ pub const RndGame = struct
             .allocator = allocator,
             .settings = settings,
             .graph = graph,
-            .rnd = Random.init(7), //init_randomized(),
+            .rnd = Random.init(1), //_randomized(),
             .gen = try MovGen.init(allocator, settings, graph, move_event),
             .bag = Bag.init(settings),
             .board = Board.init(settings),
@@ -62,8 +62,12 @@ pub const RndGame = struct
         }
     }
 
-    pub fn play(self: *RndGame) !void
+    pub fn play(self: *RndGame, comptime display: bool) !bool
     {
+        if (display) std.debug.print("RND: {}", .{self.rnd.seed});
+        self.board.clear();
+        self.bag.reset(self.settings);
+        self.rack.clear();
         //utils.print_bag(&self.bag, self.settings);
         var total_moves: usize = 0;
         var total_time: u64 = 0;
@@ -85,10 +89,18 @@ pub const RndGame = struct
             total_time += elapsed;
             total_score += bestmove.score;
           //  utils.print_bag(&self.bag, self.settings);
-            utils.printmove(&self.board, &bestmove, self.settings, oldrack);
-            std.debug.print("bag: {} left\n", .{self.bag.str.len});
+            if (display) utils.printmove(&self.board, &bestmove, oldrack);
+            if (display) std.debug.print("bag: {} left\n", .{self.bag.str.len});
+            //utils.printmove_only(&bestmove, self.settings);
         }
-        std.debug.print("duration without printing: {} milliseconds, total moves generated {}, totalscore {}\n", .{ total_time / 1000000, total_moves, total_score });
+        if (display) std.debug.print("duration without printing: {} milliseconds, total moves generated {}, totalscore {}\n", .{ total_time / 1000000, total_moves, total_score });
+        const ok = try scrabble.validate_board(&self.board, self.graph);
+        if (!ok)
+        {
+            utils.printboard(&self.board);
+        }
+        else std.debug.print("game ok   {}\n", .{self.rnd.seed});
+        return ok;
     }
 
     fn pick_random(self: *RndGame) bool

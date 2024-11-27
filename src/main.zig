@@ -21,46 +21,58 @@ const MovGen = movgen.MovGen;
 
 pub fn main() !void
 {
-    //std.debug.print("size of state {}", .{@sizeOf(movgen.State)});
-    //if (true) return;
+    var cp_out = UTF8ConsoleOutput.init();
+    defer cp_out.deinit();
 
-    const size = @sizeOf(std.bit_set.IntegerBitSet(64));
-    std.debug.print("SIZE {}\n", .{size});
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer { _ = gpa.deinit(); }
+    const allocator = gpa.allocator();
 
-    run() catch |err|
+    // var hash = std.StringHashMap(void).init(allocator);
+    // defer hash.deinit();
+    // try hash.put("hallo", {});
+    // try hash.put("goedemorgen", {});
+
+    // std.debug.print("{}\n", .{hash.contains("hallo")});
+    // std.debug.print("{}\n", .{hash.contains("goedemorgen")});
+    // std.debug.print("{}\n", .{hash.contains("goedemorge")});
+
+
+    run(allocator) catch |err|
     {
         std.debug.print("\x1b[31mError: {}, Message: {s}\x1b[0m\n", .{err, scrabble.get_last_error()});
     };
-
-    //try test_board(allocator, &settings, &g);
 
     std.debug.print("Program ready. press enter to quit\n", .{});
     try readline();
 }
 
-fn run()!void
+fn run(allocator: std.mem.Allocator)!void
 {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer { _ = gpa.deinit(); }
-    const allocator = gpa.allocator();
 
     var settings = try Settings.init(allocator, .Dutch);
     defer settings.deinit();
-    //var g: gaddag.Graph = try gaddag.load_graph_from_text_file("C:\\Data\\ScrabbleData\\nl.txt", allocator, &settings);
+    //var g: gaddag.Graph = try gaddag.load_graph_from_text_file("C:\\Data\\ScrabbleData\\slo.txt", allocator, &settings);
     // try gaddag.save_graph_to_bin_file(&g, "C:\\Data\\ScrabbleData\\nl.bin");
     var g: gaddag.Graph = try gaddag.load_graph_from_bin_file("C:\\Data\\ScrabbleData\\nl.bin", allocator, &settings);
     defer g.deinit();
     try g.validate();
 
-    try test_random_game(allocator, &settings, &g);
-    //try test_board(allocator, &settings, &g);
+    //std.debug.print("{}\n", .{g.word_exists("virgotočasen")});
+
+    //try test_random_game(allocator, &settings, &g);
+    try test_board(allocator, &settings, &g);
 }
 
 fn test_random_game(allocator: std.mem.Allocator, settings: *const Settings, graph: *Graph) !void
 {
     var game: tests.RndGame = try tests.RndGame.init(allocator, settings, graph);
     defer game.deinit();
-    try game.play();
+    for (0..100) |_|
+    {
+        const ok: bool = try game.play(false);
+        if (!ok) break;
+    }
 }
 
 fn readline() !void
@@ -106,7 +118,7 @@ fn test_board(allocator: std.mem.Allocator, settings: *const Settings, graph: *G
 
     //aanbiddelijkste
 
-    utils.printboard(&board, settings);
+    utils.printboard(&board);
 
     var gen = try MovGen.init(allocator, settings, graph, null);
     defer gen.deinit();
@@ -136,10 +148,11 @@ fn test_board(allocator: std.mem.Allocator, settings: *const Settings, graph: *G
     for (gen.movelist.items) |*m|
     {
         //if (m.flags.is_crossword_generated and scrabble.square_x(m.anchor) == 11 and !m.flags.is_horizontally_generated and m.letters.len == 7)// and m.letters.len == 4)// and m.flags.is_crossword_generated and m.first().square == 98)
+        if (m.letters.len == 1)
         {
-            _ = m;
+            //_ = m;
             //utils.printmove_only(m, settings);
-            //utils.printmove(&board, m, settings, null);
+            utils.printmove(&board, m, null);
             idx += 1;
         }
         //if (idx > 20) break;
@@ -176,7 +189,6 @@ fn test_board(allocator: std.mem.Allocator, settings: *const Settings, graph: *G
 }
 
 
-
 fn test_slo(allocator: std.mem.Allocator, settings: *const Settings) !void
 {
 
@@ -209,3 +221,42 @@ fn test_slo(allocator: std.mem.Allocator, settings: *const Settings) !void
     }
 
 }
+
+// const std = @import("std");
+// const print = std.debug.print;
+// const builtin = @import("builtin");
+
+const builtin = @import("builtin");
+
+const UTF8ConsoleOutput = struct
+{
+    original: ?c_uint = null, // cowboy
+
+    fn init() UTF8ConsoleOutput
+    {
+        var self = UTF8ConsoleOutput{};
+        if (builtin.os.tag == .windows)
+        {
+            const kernel32 = std.os.windows.kernel32;
+            self.original = kernel32.GetConsoleOutputCP();
+            _ = kernel32.SetConsoleOutputCP(65001);
+        }
+        return self;
+    }
+
+    fn deinit(self: *UTF8ConsoleOutput) void
+    {
+        if (self.original) |org|
+        {
+            _ = std.os.windows.kernel32.SetConsoleOutputCP(org);
+        }
+    }
+};
+
+pub fn krak() !void {
+    var cp_out = UTF8ConsoleOutput.init();
+    defer cp_out.deinit();
+
+    //print("\u{00a9}", .{});
+}
+
