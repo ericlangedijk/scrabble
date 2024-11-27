@@ -31,11 +31,12 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 const utils = @import("utils.zig");
+const rnd = @import("rnd.zig");
 
 /// No unicode yet!
 /// 8 bits, this is the real unicode char, max supported value = 255.\
 /// We only support simple european languages for now.
-pub const Char = u8;
+pub const Char = u21;
 
 /// 5 bits, this is our mapped value, max supported value = 31.
 pub const CharCode = u5;
@@ -52,6 +53,16 @@ pub const Value = u4;
 pub const EMPTY_CHARCODE_MASK: CharCodeMask = CharCodeMask.initEmpty();
 
 //pub const EMPTYMASK: CharCodeMask = CharCodeMask.initEmpty();
+
+
+pub const Dim = struct
+{
+    width: u9,
+    height: u9,
+};
+
+/// For now we use this structure. Later on the board itself will be comptimed i think.
+pub const DIM: Dim = Dim {.width = 15, .height = 15 };
 
 pub const Orientation = enum
 {
@@ -88,20 +99,30 @@ pub const Language = enum
     // quite a few here...
 };
 
+pub const Tile = struct
+{
+    code: CharCode,
+    char: Char,
+    scrabblevalue: u8,
+    available: u8,
+};
+
 pub const Settings = struct
 {
-    /// Our char table will look like this:\
-    /// `0 a b c d`...\
-    /// `0 1 2 3 4`...
-    codes: [256]CharCode = std.mem.zeroes([256]CharCode), // TODO: make hashmap if too big
-    /// `0 1 2 3 4`...\
-    /// `0 a b c d`...
-    unicode_chars: [32]Char = std.mem.zeroes([32]Char), // TODO: make bigger if needed -> this has impact on the whole system
-    values: [32]u8 = std.mem.zeroes([32]u8), // TODO: make bigger if needed -> this has impact on the whole system
-    distribution: [32]u8 = std.mem.zeroes([32]u8), // TODO: index #0 is abused for the number of blanks.
+    allocator: std.mem.Allocator,
+    /// Encoding from char (u21) to our internal code (u5)
+    map: std.AutoHashMap(Char, CharCode),
+    /// Our Char table.
+    chars: [32]Char,
+    /// Our value table for each letter / tile.
+    values: [32]u8,
+    /// The available amounts in the game.
+    distribution: [32]u8,
+    /// The number of blanks in the game.
     blanks: u8 = 0,
+    has_unicode: bool,
 
-    pub fn init(language: Language) !Settings
+    pub fn init(allocator: std.mem.Allocator, language: Language) !Settings
     {
         const def: *const LocalDef  = switch(language)
         {
@@ -112,63 +133,50 @@ pub const Settings = struct
         assert(def.unique_letters.len == def.values.len);
         assert(def.unique_letters.len == def.distribution.len);
 
-        var result = Settings {};
-
-        var code: CharCode = 1;
-        for(def.unique_letters, def.values, def.distribution) |ch, value, amount|
+        var result = Settings
         {
-            const cc: Char = ch;
-            result.codes[cc] = code;
-            result.unicode_chars[code] = cc;
+            .allocator = allocator,
+            .map = std.AutoHashMap(Char, CharCode).init(allocator),
+            .chars = std.mem.zeroes([32]Char),
+            .values = std.mem.zeroes([32]u8),
+            .distribution = std.mem.zeroes([32]u8),
+            .blanks = 0,
+            .has_unicode = false,
+        };
+        errdefer result.deinit();
+
+        // 0 is mapped to 0
+        try result.map.put(0, 0);
+
+        // Generate our codes, starting with 1
+        var code: CharCode = 1;
+        for(def.unique_letters, def.values, def.distribution) |char, value, amount|
+        {
+            try result.map.put(char, code);
+            result.chars[code] = char;
             result.values[code] = value;
             result.distribution[code] = amount;
+            if (char > 255) result.has_unicode = true;
             code += 1;
+            if (code >= 32) return ScrabbleError.TooManyCharacters;
         }
         result.blanks = def.blanks;
         return result;
     }
 
-    pub fn codepoint_to_charcode(self: *const Settings, u: u21) !CharCode
+    pub fn deinit(self: *Settings) void
     {
-        try check_unicode_char_supported(u);
-        const c: Char = @truncate(u);
-        return self.codes[c];
+        self.map.deinit();
     }
 
-    pub fn codepoint_to_charcode_unsafe(self: *const Settings, u: u21) CharCode
+    pub fn encode(self: *const Settings, u: Char) !CharCode
     {
-        return self.codes[u];
+        return self.map.get(u) orelse ScrabbleError.CharacterNotFound;
     }
 
-    pub fn codepoint_to_char(u: u21) !Char
+    pub fn decode(self: *const Settings, c: CharCode) Char
     {
-        try check_unicode_char_supported(u);
-        return @truncate(u);
-    }
-
-    pub fn char_to_code(self: *const Settings, u: Char) CharCode
-    {
-        return self.codes[u];
-    }
-
-    pub fn code_to_char(self: *const Settings, c: CharCode) Char
-    {
-        return self.unicode_chars[c];
-    }
-
-    pub fn is_supported_unicode_char(c: u21) bool
-    {
-        return c <= 255;//511;
-    }
-
-    pub fn check_unicode_char_supported(c: u21) !void
-    {
-        if (!is_supported_unicode_char(c))
-        {
-            set_last_error("invalid char encountered");
-            //std.debug.print("INVALID CHAR {}", .{c});
-            return ScrabbleError.UnsupportedCharacter;
-        }
+        return self.chars[c];
     }
 
     pub fn lv(self: *const Settings, letter: Letter) u8
@@ -179,36 +187,40 @@ pub const Settings = struct
 
 const LocalDef = struct
 {
-    /// The array of unique letters as a unicode string
-    unique_letters: []const u8,
-    /// The value of each tile
+    unique_letters: []const u21,
     values: []const u8,
-    /// The amounts of each tile
     distribution: []const u8,
-    /// The number of blanks
     blanks: u8,
 };
 
-const DutchDef: LocalDef = LocalDef
+const DutchDef = LocalDef
 {
-    .unique_letters = "abcdefghijklmnopqrstuvwxyz",
-    .values       = &.{1,  3,  5,  2,  1,  4,  3,  4,  1,  4,  3,  3,  3,  1,  1,  3, 10,  2,  2,  2,  4,  4,  5,  8,  8,  4},
-    .distribution = &.{6,  2,  2,  5, 18,  2,  3,  2,  4,  2,  3,  3,  3, 10,  6,  2,  1,  5,  5,  5,  3,  2,  2,  1,  1,  2},
+    .unique_letters = &.{ 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z' },
+    .values         = &.{  1,   3,   5,   2,   1,   4,   3,   4,   1,   4,   3,   3,   3,   1,   1,   3,   10,  2,   2,   2,   4,   4,   5,   8,   8,   4 },
+    .distribution   = &.{  6,   2,   2,   5,   18,  2,   3,   2,   4,   2,   3,   3,   3,   10,  6,   2,   1,   5,   5,   5,   3,   2,   2,   1,   1,   2 },
     .blanks = 2,
 };
 
-const EnglishDef: LocalDef = LocalDef
+const EnglishDef = LocalDef
 {
-    .unique_letters = "abcdefghijklmnopqrstuvwxyz",
-    .values       = &.{1,  3,  3,  2,  1,  4,  2,  4,  1,  8,  5,  1,  3,  1,  1,  3, 10,  1,  1,  1,  1,  4,  4,  8,  4, 10},
-    .distribution = &.{9,  2,  2,  4, 12,  2,  3,  2,  9,  1,  1,  4,  2,  6,  8,  2,  1,  6,  4,  6,  4,  2,  2,  1,  2,  1},
+    .unique_letters = &.{ 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z' },
+    .values         = &.{  1,   3,   3,   2,   1,   4,   2,   4,   1,   8,   5,   1,   3,   1,   1,   3,   10,  1,   1,   1,   1,   4,   4,   8,   4,   10 },
+    .distribution   = &.{  9,   2,   2,   4,   12,  2,   3,   2,   9,   1,   1,   4,   2,   6,   8,   2,   1,   6,   4,   6,   4,   2,   2,   1,   2,   1 },
+    .blanks = 2,
+};
+
+const SlovenianDef = LocalDef
+{
+    .unique_letters = &.{ 'a', 'b', 'c', 'č', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'r', 's', 'š', 't', 'u', 'v', 'z', 'ž' },
+    .values         = &.{  1,   4,   8,   5,   2,   1,   10,  4,   5,   1,   1,   3,   1,   3,   1,   1,   3,   1,   1,   6,   1,   3,   2,   4,   10 },
+    .distribution   = &.{  10,  2,   1,   1,   4,   11,  1,   2,   1,   9,   4,   3,   4,   2,   7,   8,   2,   6,   6,   1,   4,   2,   4,   2,   1 },
     .blanks = 2,
 };
 
 /// Core letter
 pub const Letter = packed struct
 {
-    const EMPTY: Letter = Letter.init(0, false);
+    pub const EMPTY: Letter = Letter.init(0, false);
 
     charcode: CharCode = 0,
     is_blank: bool = false,
@@ -236,6 +248,11 @@ pub const Letter = packed struct
     pub fn is_filled(self: Letter) bool
     {
         return self.charcode != 0;
+    }
+
+    pub fn as_u6(self: Letter) u6
+    {
+        return @bitCast(self);
     }
 };
 
@@ -274,7 +291,7 @@ pub const Rack = struct
         var rack: Rack = EMPTY;
         for (string) |cp|
         {
-            const cc =  try settings.codepoint_to_charcode(cp);
+            const cc =  try settings.encode(cp);
             rack.add(cc);
         }
         return rack;
@@ -461,6 +478,19 @@ pub const Move = struct
         return move;
     }
 
+    /// EXPERIMENTAL
+    pub fn append_or_insert(self: *Move, letter: Letter, square: Square, comptime dir: Direction) void
+    {
+        if (dir == .Backwards)
+        {
+            self.insert_letter(letter, square);
+        }
+        else
+        {
+            self.add_letter(letter, square);
+        }
+    }
+
 
     /// Function for movegeneration (only used for first turn).
     pub fn shift_left(self: *Move, comptime orientation: Orientation) void
@@ -490,16 +520,14 @@ pub const Move = struct
 
 pub const Bag = struct
 {
-    /// We want to abuse index #0 for the blanks count.
-    available: [32]u8 = std.mem.zeroes([32]u8),
-    blanks: u8 = 0,
+    /// All letters in here, including the blanks.
+    str: std.BoundedArray(Letter, 256),
 
     pub fn init(settings: *const Settings) Bag
     {
         return Bag
         {
-            .available = settings.distribution,
-            .blanks = settings.blanks,
+            .str = to_str(settings),
         };
     }
 
@@ -508,78 +536,36 @@ pub const Bag = struct
         return Bag {};
     }
 
-    pub fn add(self: *Bag, charcode: CharCode) void
-    {
-        self.available[charcode] += 1;
-    }
-
-    pub fn get_count(self: *const Bag) u32
-    {
-        var result: u32 = self.blanks;
-        for(self.available) |a| result += a;
-        return result;
-    }
-
-    pub fn to_string(self: *const Bag) std.BoundedArray(Letter, 256)
+    fn to_str(settings: *const Settings) std.BoundedArray(Letter, 256)
     {
         var result: std.BoundedArray(Letter, 256) = .{};
-        for(self.available, 0..) |avail, idx|
+        for(settings.distribution, 0..) |avail, idx|
         {
             if (avail == 0) continue;
             const charcode: CharCode = @intCast(idx);
-            const count: u8 = avail;
-            for (0..count) |_|
-            {
-                result.appendAssumeCapacity(Letter.init(charcode, false));
-            }
+            result.appendNTimesAssumeCapacity(Letter.init(charcode, false), avail);
         }
-        for (0..self.blanks) |_|
+
+        for (0..settings.blanks) |_|
         {
-            result.appendAssumeCapacity(Letter.init(0, true));
+            result.appendAssumeCapacity(Letter.blank(0));
         }
         return result;
     }
 
-    pub fn remove_letter(self: *Bag, letter: Letter) void
+    /// This uses swap removing. The order is messed up, but that does not matter: it is a bag :)
+    pub fn extract_letter(self: *Bag, idx: usize) Letter
     {
-        if (letter.is_blank)
-        {
-            assert(self.blanks > 0);
-            self.blanks -= 1;
-        }
-        else
-        {
-            assert(self.available[letter.charcode] > 0);
-            self.available[letter.charcode] -= 1;
-        }
+        return self.str.swapRemove(idx);
     }
 
-    // pub fn pick(self: *Bag, idx: usize) usize
-    // {
-    //     var cumulative: usize = 0;
-    //     for (self.available, 0..) |count, i|
-    //     {
-    //         cumulative += count;
-    //         if (idx < cumulative)
-    //         {
-    //             return i; // Found the letter corresponding to the index
-    //         }
-    //     }
-    //     unreachable; // Should never happen if index < total count
-    // }
-
+    /// Do not throw known blanks in here.
+    pub fn append_letter(self: *Bag, letter: Letter) void
+    {
+        assert(letter.is_blank and letter.charcode == 0 or !letter.is_blank and letter.charcode > 0);
+        self.str.appendAssumeCapacity(letter);
+    }
 };
-
-pub const Dim = struct
-{
-    width: u9,
-    height: u9,
-};
-
-/// For now we use this structure. Later on the board itself will be comptimed.
-pub const DIM: Dim = Dim {.width = 15, .height = 15 };
-
-
 
 /// Fixed standard 15 x 15 scrabble board.
 pub const Board = struct
@@ -709,6 +695,15 @@ pub const Board = struct
         return self.is_filled(q) and self.is_next_free(q, orientation, .Forwards);
     }
 
+    pub fn is_crossword_anchor(self: *const Board, q: Square, comptime ori: Orientation) bool
+    {
+        const opp = ori.opp();
+        if (!self.is_empty(q)) return false;
+        if (self.has_filled_neighbour(q, opp, .Backwards)) return true;
+        if (self.has_filled_neighbour(q, opp, .Forwards)) return true;
+        return false;
+    }
+
     pub fn has_filled_neighbour(self: *const Board, q: Square, comptime ori: Orientation, comptime dir: Direction) bool
     {
         // NEIGHBOURCALLS += 1;
@@ -733,13 +728,13 @@ pub const Board = struct
         return if (result.is_filled()) result else null;
     }
 
-    pub fn set_string(self: *Board, settings: *const Settings, square: Square, str: []const u8, comptime ori: Orientation) void
+    pub fn set_string(self: *Board, settings: *const Settings, square: Square, str: []const u8, comptime ori: Orientation) !void
     {
         const delta = ori.delta(DIM);
         var q: Square = square;
         for (str) |char|
         {
-            const cc: CharCode = settings.char_to_code(char);
+            const cc: CharCode = try settings.encode(char);
             const letter: Letter = Letter.init(cc, false);
             self.squares[q] = letter;
             //std.debug.print("{} {c}\n", .{q, char});
@@ -911,9 +906,9 @@ pub fn calculate_score(settings: *const Settings, board: *const Board, move: *co
 {
     if (move.letters.len == 0) return 0;
     const opp: Orientation = orientation.opp();
-    const delta: u9 = if (orientation == .Horizontal) 1 else 15;
-    const my_first_square: Square = move.letters.get(0).square;
-    const my_last_square: Square = move.letters.get(move.letters.len - 1).square;
+    const delta: u9 = orientation.delta(DIM);
+    const my_first_square: Square = move.first().square;
+    const my_last_square: Square = move.last().square;
     var word_mul: u32 = 1;
     var my_score: u32 = 0;
     var cross_score: u32 = 0;
@@ -945,12 +940,14 @@ pub fn calculate_score(settings: *const Settings, board: *const Board, move: *co
             var sidescore: u32 = 0;
             var it3 = board.letter_iterator(q, opp, .Backwards, false);
             while (it3.next()) |B| sidescore += settings.lv(B.letter);
+            const qb = it3.current_square();
             var it4 = board.letter_iterator(q, opp, .Backwards, false);
             while (it4.next()) |B| sidescore += settings.lv(B.letter);
-            if (sidescore > 0)
+            const qf = it4.current_square();
+            if (qb != qf)
             {
-                sidescore += lettermul * settings.lv(moveletter.letter);
-                sidescore *= boardmul;
+                sidescore += lettermul * settings.lv(moveletter.letter); // letter counts in both directions
+                sidescore *= boardmul; // multiply counts in both directions
                 cross_score += sidescore;
             }
         }
@@ -999,9 +996,9 @@ pub fn get_last_error() []const u8
 pub const ScrabbleError = error
 {
     UnsupportedLanguage,
-    UnsupportedCharacter,
+    TooManyCharacters,
+    CharacterNotFound,
     GaddagBuildError,
     GaddagValidationFailed,
-    TestError,
 };
 

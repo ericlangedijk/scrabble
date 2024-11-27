@@ -32,7 +32,7 @@ pub fn get_coord_name(square: scrabble.Square) ![]const u8
     const x: u8 = @truncate(scrabble.square_x(square));
     const y: u8 = @truncate(scrabble.square_y(square));
     var buf: [3]u8 = undefined;
-    return try std.fmt.bufPrint(&buf, "{c}{d}", .{x + 'a', y + 1});
+    return try std.fmt.bufPrint(&buf, "{c}{d}", .{x + 'a', y + 1}); // TODO: this is crap
 }
 
 
@@ -44,9 +44,9 @@ pub fn printboard(board: *const scrabble.Board, settings: *const scrabble.Settin
     {
         const x = scrabble.square_x(q);
         //const y = scrabble.square_y(q);
-        var char = settings.code_to_char(board.squares[q].charcode);
+        var char: scrabble.Char = settings.decode(board.squares[q].charcode);
         if (char == 0) char = '.';
-        std.debug.print("{c} ", .{char});
+        std.debug.print("{u} ", .{char});
         if (x == 14) std.debug.print("\n", .{});
     }
 
@@ -64,17 +64,17 @@ pub fn printmove(board: *const scrabble.Board, move: *const scrabble.Move, setti
 
         if (move.find(q)) |L|
         {
-            const char = settings.code_to_char(L.charcode);
+            const char: scrabble.Char = settings.decode(L.charcode);
             if (L.is_blank)
-                std.debug.print("\x1b[31m{c} \x1b[0m", .{char})
+                std.debug.print("\x1b[31m{u} \x1b[0m", .{char})
             else
-                std.debug.print("\x1b[34m{c} \x1b[0m", .{char});
+                std.debug.print("\x1b[34m{u} \x1b[0m", .{char});
         }
         else
         {
-            var char = settings.code_to_char(board.squares[q].charcode);
+            var char = settings.decode(board.squares[q].charcode);
             if (char == 0) char = '.';
-            std.debug.print("{c} ", .{char});
+            std.debug.print("{u} ", .{char});
         }
         if (x == 14) std.debug.print("\n", .{});
     }
@@ -83,21 +83,45 @@ pub fn printmove(board: *const scrabble.Board, move: *const scrabble.Move, setti
     //std.debug.print("\x1b[34mThis is blue text\x1b[0m\n", .{}); // Blue text
 }
 
-pub fn print_rack(rack: scrabble.Rack, settings: *const scrabble.Settings) void
+pub fn printmove_only(move: *const scrabble.Move, settings: *const scrabble.Settings) void
+{
+    for (move.letters.slice()) |moveletter|
     {
-        std.debug.print("rack: ", .{});
-        for (rack.letters.slice()) |rackletter|
-        {
-            std.debug.print("{c}", .{settings.code_to_char(rackletter)});
-        }
-        for (0..rack.blanks) |_|
-        {
-            std.debug.print("*", .{});
-        }
-        std.debug.print("\n", .{});
+        std.debug.print("", .{});
+        const char: scrabble.Char = settings.decode(moveletter.letter.charcode);
+        if (moveletter.letter.is_blank)
+            std.debug.print("{u}* {}/ ", .{char, moveletter.square})
+        else
+            std.debug.print("{u} {}/ ", .{char, moveletter.square});
     }
+    std.debug.print("\n", .{});
+}
 
+pub fn print_rack(rack: scrabble.Rack, settings: *const scrabble.Settings) void
+{
+    std.debug.print("rack: ", .{});
+    for (rack.letters.slice()) |rackletter|
+    {
+        std.debug.print("{u}", .{settings.decode(rackletter)});
+    }
+    for (0..rack.blanks) |_|
+    {
+        std.debug.print("*", .{});
+    }
+    std.debug.print("\n", .{});
+}
 
+pub fn print_bag(bag: *const scrabble.Bag, settings: *const scrabble.Settings) void
+{
+    for (bag.str.slice()) |B|
+    {
+        if (B.is_blank)
+        std.debug.print("*", .{})
+        else std.debug.print("{u}", .{settings.decode(B.charcode)});
+    }
+    std.debug.print("\n", .{});
+
+}
     // std.debug.print("\x1b[31mThis is red text\x1b[0m\n", .{}); // Red text
     // std.debug.print("\x1b[32mThis is green text\x1b[0m\n", .{}); // Green text
     // std.debug.print("\x1b[34mThis is blue text\x1b[0m\n", .{}); // Blue text
@@ -131,4 +155,59 @@ pub fn print_rack(rack: scrabble.Rack, settings: *const scrabble.Settings) void
 //     const y = scrabble.square_y(square);
 //     std.fmt.buf
 // }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// const std = @import("std");
+// const print = std.debug.print;
+// const builtin = @import("builtin");
+
+// const UTF8ConsoleOutput = struct {
+//     original: c_uint = undefined,
+//     fn init() UTF8ConsoleOutput {
+//         var self = UTF8ConsoleOutput{};
+//         if (builtin.os.tag == .windows) {
+//             const kernel32 = std.os.windows.kernel32;
+//             self.original = kernel32.GetConsoleOutputCP();
+//             _ = kernel32.SetConsoleOutputCP(65001);
+//         }
+//         return self;
+//     }
+//     fn deinit(self: *UTF8ConsoleOutput) void {
+//         if (self.original != undefined) {
+//             _ = std.os.windows.kernel32.SetConsoleOutputCP(self.original);
+//         }
+//     }
+// };
+
+// pub fn main() !void {
+//     var cp_out = UTF8ConsoleOutput.init();
+//     defer cp_out.deinit();
+
+//     print("\u{00a9}", .{});
+// }
+
+
+
+
+
+
+
+
+
+
+
+
+
 

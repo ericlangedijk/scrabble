@@ -39,11 +39,11 @@ pub fn load_graph_from_text_file(filename: []const u8, allocator: std.mem.Alloca
     errdefer graph.deinit();
 
     // Read line by line
-    var it = std.mem.splitAny(u8, file_buffer, &.{13, 10});
+    var it = std.mem.splitAny(u8, file_buffer, &.{13, 10}); // TODO: make a byte + unicode version depending on settings.
     while (it.next()) |word|
     {
         if (word.len == 0) continue; // skip empty (split any is a bit strange)
-        try graph.add_word(word);
+        try graph.add_word(word); // TODO: just skip invalid words
     }
 
     const building_time = timer.lap();
@@ -78,7 +78,7 @@ pub fn load_graph_from_text_file(filename: []const u8, allocator: std.mem.Alloca
     return graph;
 }
 
-pub fn save_graph_to_file(graph: *Graph, filename: []const u8,) !void
+pub fn save_graph_to_bin_file(graph: *Graph, filename: []const u8) !void
 {
     var file = try std.fs.createFileAbsolute(filename, .{});
     defer file.close();
@@ -88,6 +88,22 @@ pub fn save_graph_to_file(graph: *Graph, filename: []const u8,) !void
     _ = written;
     // Ensure all data is flushed to the file
     try writer.flush();
+}
+
+/// TODO: try read directly into nodes memory.
+pub fn load_graph_from_bin_file(filename: []const u8, allocator: std.mem.Allocator, settings: *const Settings) !Graph
+{
+     // load text file in memory.
+    const file: std.fs.File = try std.fs.openFileAbsolute(filename, .{});
+    defer file.close();
+
+    const stat = try file.stat();
+    const file_size = stat.size;
+
+    const file_buffer = try file.readToEndAlloc(allocator, file_size);
+    defer allocator.free(file_buffer);
+
+    return Graph.load(allocator, settings, file_buffer);
 }
 
 /// The Graph is only usable after calling `after_loading`.
@@ -109,9 +125,8 @@ pub const Graph = struct
     allocator: std.mem.Allocator,
     settings: *const Settings,
     nodes: std.ArrayList(Node),
-    freelists: [32]std.ArrayList(u32),
+    freelists: [32]std.ArrayList(u32), // TODO: we should have an array of arraylist to save memory, not needed after building.
     word_count: u32,
-    node_count: u32,
     wasted: u32,
 
     pub fn init(allocator: std.mem.Allocator, settings: *const Settings, initial_capacity: usize) !Graph
@@ -121,9 +136,21 @@ pub const Graph = struct
             .allocator = allocator,
             .settings = settings,
             .nodes = try create_nodes(allocator, initial_capacity),
-            .freelists = try create_freelists(allocator),
+            .freelists = try create_freelists(allocator, 128),
             .word_count = 0,
-            .node_count = 1,
+            .wasted = 0,
+        };
+    }
+
+    fn load(allocator: std.mem.Allocator, settings: *const Settings, bin: []const u8) !Graph
+    {
+        return Graph
+        {
+            .allocator = allocator,
+            .settings = settings,
+            .nodes = try load_nodes(allocator, bin),
+            .freelists = try create_freelists(allocator, 0),
+            .word_count = 0,
             .wasted = 0,
         };
     }
@@ -136,14 +163,32 @@ pub const Graph = struct
         return result;
     }
 
-    fn create_freelists(allocator: std.mem.Allocator) ![32]std.ArrayList(u32)
+    // There is also simpler option (if you storing just one array in file) to use bytesAsSlice on the file content to get slice of your type. And then use std.array_list.ArrayListAligned.fromOwnedSlice
+    fn load_nodes(allocator: std.mem.Allocator, bin: []const u8) !std.ArrayList(Node)
+    {
+        const initial_capacity: usize = bin.len / Node.STRUCTSIZE;
+        //std.debug.print("cap {} len {} nodesize {} mod {}\n", .{initial_capacity, bin.len, Node.STRUCTSIZE, bin.len % Node.STRUCTSIZE});
+        assert(bin.len % Node.STRUCTSIZE == 0);
+        var result: std.ArrayList(Node) = try std.ArrayList(Node).initCapacity(allocator, initial_capacity);
+        result.items.len = initial_capacity;
+        const bytes = std.mem.sliceAsBytes(result.items);
+        @memcpy(bytes, bin);
+        return result;
+    }
+
+    // pub fn as_bytes(self: *Graph) []const u8
+    // {
+    //     return std.mem.sliceAsBytes(self.nodes.items);
+    // }
+
+    fn create_freelists(allocator: std.mem.Allocator, freelists_initial_capacity: usize) ![32]std.ArrayList(u32)
     {
         var result: [32]std.ArrayList(u32) = undefined;
         for (0..32) |i|
         {
             if (i > 0)
             {
-                result[i] = try std.ArrayList(u32).initCapacity(allocator, 32); // this was the max used we found.
+                result[i] = try std.ArrayList(u32).initCapacity(allocator, freelists_initial_capacity); // this was the max used we found.
             }
             else
             {
@@ -183,7 +228,7 @@ pub const Graph = struct
         const len = self.nodes.items.len;
         for (0..len) |i|
         {
-            const node: Node = self.get_node_by_index(@intCast(i));
+            const node: *const Node = self.get_node_by_index(@intCast(i));
             if (node.count > 1)
             {
                 const slice = self.nodes.items[node.child_ptr..node.child_ptr + node.count];
@@ -266,42 +311,37 @@ pub const Graph = struct
         }
     }
 
-    pub fn as_bytes(self: *Graph) []const u8
+    /// Direct get.
+    pub fn get_node_by_index(self: *const Graph, idx: u32) *const Node
     {
-        return std.mem.sliceAsBytes(self.nodes.items);
+        assert(idx < self.nodes.items.len);
+        return &self.nodes.items[idx];
     }
 
     /// This is just the first node.
-    pub fn get_rootnode(self: *const Graph) Node
+    pub fn get_rootnode(self: *const Graph) *const Node
     {
         return self.get_node_by_index(0);
     }
 
     /// Gets a child from the root. Note that the return value is *not* a bownode but a prefix (used for backward tracking).
-    pub fn find_node_from_root(self: *const Graph, charcode: CharCode) ?Node
+    pub fn find_node_from_root(self: *const Graph, charcode: CharCode) ?*const Node
     {
         return self.find_node(self.get_rootnode(), charcode);
     }
 
-    /// Direct get.
-    pub fn get_node_by_index(self: *const Graph, idx: u32) Node
-    {
-        assert(idx < self.nodes.items.len);
-        return self.nodes.items[idx];
-    }
-
-    /// Key method. Using the node mask to directly convert it to an index. This only works if the nodes are sorted.
-    /// Thanks to Zigmaster Sze
-    pub fn find_node(self: *const Graph, parentnode: Node, charcode: CharCode) ?Node
+    /// Key method. Using the node mask to directly convert it to an index. This only works if the childnodes are sorted.
+    /// Thanks to Zig master Sze
+    pub fn find_node(self: *const Graph, parentnode: *const Node, charcode: CharCode) ?*const Node
     {
         const charcode_mask: u32 = get_mask(charcode);
         if (parentnode.mask & charcode_mask == 0) return null;
         const index = @popCount(parentnode.mask & (charcode_mask -% 1));
-        return self.nodes.items[parentnode.child_ptr + index];
+        return &self.nodes.items[parentnode.child_ptr + index];
     }
 
     /// Sequential search. Debug only.
-    pub fn find_node_unsorted(self: *const Graph, parentnode: Node, charcode: CharCode) ?Node
+    pub fn find_node_unsorted(self: *const Graph, parentnode: *const Node, charcode: CharCode) ?*const Node
     {
         if (parentnode.count == 0) return null;
         const children = self.nodes.items[parentnode.child_ptr..parentnode.child_ptr + parentnode.count];
@@ -310,14 +350,14 @@ pub const Graph = struct
     }
 
     /// Gets the bow node (only if this node has the is_bow flag set). The bow node is always the first child.
-    pub fn get_bow(self: *const Graph, parentnode: Node) ?Node
+    pub fn get_bow(self: *const Graph, parentnode: *const Node) ?*const Node
     {
         if (parentnode.count == 0 or !parentnode.data.is_bow) return null;
         return self.get_node_by_index(parentnode.child_ptr);
     }
 
     /// Gets a direct slice to the child nodes.
-    pub fn get_children(self: *const Graph, parentnode: Node) []const Node
+    pub fn get_children(self: *const Graph, parentnode: *const Node) []const Node
     {
         return self.nodes.items[parentnode.child_ptr..parentnode.child_ptr + parentnode.count];
     }
@@ -327,16 +367,15 @@ pub const Graph = struct
         return self.find_word(word) != null;
     }
 
-    // TODO: we also want a codepoint_to_charcode which is a bit faster, if possible
-    fn find_word(self: *const Graph, word: []const u8) ?Node
+    fn find_word(self: *const Graph, word: []const u8) ?*const Node
     {
         if (word.len == 0) return null;
-        const fc: CharCode = self.settings.codepoint_to_charcode(word[0]) catch return null;
-        var node: Node = self.find_node(self.get_rootnode(), fc) orelse return null;
+        const fc: CharCode = self.settings.encode(word[0]) catch return null;
+        var node: *const Node = self.find_node(self.get_rootnode(), fc) orelse return null;
         node = self.get_bow(node) orelse return null;
         for(word[1..]) |cp|
         {
-            const cc: CharCode = self.settings.codepoint_to_charcode(cp) catch return null;
+            const cc: CharCode = self.settings.encode(cp) catch return null;
             node = self.find_node(node, cc) orelse return null;
         }
         return if (node.data.is_eow) node else null;
@@ -409,7 +448,7 @@ pub const Graph = struct
         var buf = try std.BoundedArray(CharCode, 32).init(0);
         for (word) |u|
         {
-            buf.appendAssumeCapacity(try self.settings.codepoint_to_charcode(u));
+            buf.appendAssumeCapacity(try self.settings.encode(u));
         }
         return buf;
     }
@@ -428,8 +467,6 @@ pub const Graph = struct
     /// TODO: there seems to be a little BUG i did not manage to track yet....
     fn add_node(self: *Graph, parentnode: *Node, charcode: CharCode, comptime is_bow: bool) !*Node
     {
-        self.node_count += 1;
-
         const mask: u32 = get_mask(charcode);
         const new_node = Node.init(charcode);
         const old_index: u32 = parentnode.child_ptr;
@@ -531,6 +568,8 @@ pub const Graph = struct
 /// 10 bytes with mask. 6 byte without mask. TODO: we could squeeze 6 into 5 if we limit to 65 million nodes.
 pub const Node = extern struct
 {
+    pub const STRUCTSIZE: usize = @sizeOf(Node);
+
     pub const EMPTYNODE: Node = Node.init(0);
 
     /// When cleaning up the graph, we fill the unused nodes (from the remaining freelists) with invalid nodes.

@@ -21,7 +21,12 @@ const MovGen = movgen.MovGen;
 
 pub fn main() !void
 {
-    // std.debug.print("\x1b[31mThis is red text\x1b[0m\n", .{}); // Red text
+    //std.debug.print("size of state {}", .{@sizeOf(movgen.State)});
+    //if (true) return;
+
+    const size = @sizeOf(std.bit_set.IntegerBitSet(64));
+    std.debug.print("SIZE {}\n", .{size});
+
     run() catch |err|
     {
         std.debug.print("\x1b[31mError: {}, Message: {s}\x1b[0m\n", .{err, scrabble.get_last_error()});
@@ -35,16 +40,18 @@ pub fn main() !void
 
 fn run()!void
 {
-    // memory
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer { _ = gpa.deinit(); }
     const allocator = gpa.allocator();
-    // settings + graph
-    const settings = try Settings.init(.Dutch);
-    var g: gaddag.Graph = try gaddag.load_graph_from_text_file("C:\\Data\\ScrabbleData\\nl.txt", allocator, &settings);
-    //try gaddag.save_graph_to_file(&g, "C:\\Data\\ScrabbleData\\nltest.bin");
+
+    var settings = try Settings.init(allocator, .Dutch);
+    defer settings.deinit();
+    //var g: gaddag.Graph = try gaddag.load_graph_from_text_file("C:\\Data\\ScrabbleData\\nl.txt", allocator, &settings);
+    // try gaddag.save_graph_to_bin_file(&g, "C:\\Data\\ScrabbleData\\nl.bin");
+    var g: gaddag.Graph = try gaddag.load_graph_from_bin_file("C:\\Data\\ScrabbleData\\nl.bin", allocator, &settings);
     defer g.deinit();
     try g.validate();
+
     try test_random_game(allocator, &settings, &g);
     //try test_board(allocator, &settings, &g);
 }
@@ -68,8 +75,16 @@ fn readline() !void
 fn test_board(allocator: std.mem.Allocator, settings: *const Settings, graph: *Graph) !void
 {
     //const MovGen = movgen.MovGen;
+    // const xx: u21 = 'č';
+    // std.debug.print("{u}\n\n", .{xx});
 
     var board: scrabble.Board = scrabble.Board.init(settings);
+
+    // the combi for our default test 45255 moves
+    // board.set_string(settings, 112, "zend", .Horizontal);
+    // board.set_string(settings, 112, "zag", .Vertical);
+    // var rack = try scrabble.Rack.init_string(settings, "talen"); // this
+    // rack.blanks = 2;
 
     if (true)
     {
@@ -81,9 +96,15 @@ fn test_board(allocator: std.mem.Allocator, settings: *const Settings, graph: *G
     }
     //board.set_string(settings, 105, "zendinstallati", .Horizontal);
     //board.set_string(settings, 106, "endinstallati", .Horizontal);
-    board.set_string(settings, 112, "zend", .Horizontal);
-    board.set_string(settings, 112, "zag", .Vertical);
+    try board.set_string(settings, 112, "zend", .Horizontal);
+    try board.set_string(settings, 112, "zag", .Vertical);
+
+    //try board.set_string(settings, 105, "zend", .Horizontal);
+    //try board.set_string(settings, 111, "sta", .Horizontal);
+    //try board.set_string(settings, 118, "ie", .Horizontal);
             //zendinstallatie
+
+    //aanbiddelijkste
 
     utils.printboard(&board, settings);
 
@@ -96,25 +117,32 @@ fn test_board(allocator: std.mem.Allocator, settings: *const Settings, graph: *G
     //if (true) return;
 
     //var total: u64 = 0;
-    var rack = try scrabble.Rack.init_string(settings, "talen");
-    //var rack = scrabble.Rack.init();
+    var rack = try scrabble.Rack.init_string(settings, "talen"); // this
     rack.blanks = 2;
+
+    // gen.monolithic_gen(&board, &rack, .Horizontal);
+    // if (true) return;
+
     var timer: std.time.Timer = try std.time.Timer.start();
     //gen.gen_rack_moves(&board, 0, 112, graph.get_rootnode(), rack, scrabble.Move.EMPTY);
     gen.generate_moves(&board, &rack);
+
+
     const elapsed = timer.lap();
-    gen.sort();
+    //gen.sort();
 
 
     var idx: usize = 0;
     for (gen.movelist.items) |*m|
     {
-        //if (m.letters.len == 7)// and m.flags.is_horizontally_generated and m.flags.is_crossword_generated and m.first().square == 98)
+        //if (m.flags.is_crossword_generated and scrabble.square_x(m.anchor) == 11 and !m.flags.is_horizontally_generated and m.letters.len == 7)// and m.letters.len == 4)// and m.flags.is_crossword_generated and m.first().square == 98)
         {
-            utils.printmove(&board, m, settings, null);
+            _ = m;
+            //utils.printmove_only(m, settings);
+            //utils.printmove(&board, m, settings, null);
             idx += 1;
         }
-        if (idx > 20) break;
+        //if (idx > 20) break;
     }
 
     var total: u32 = 0;
@@ -125,18 +153,59 @@ fn test_board(allocator: std.mem.Allocator, settings: *const Settings, graph: *G
     }
 
     std.debug.print("\n\ngenerate {} moves time ms {} {} nanos sum-score {}\n", .{ gen.movelist.items.len, elapsed / 1000000, elapsed, total });
+    //std.debug.print("score calc time {} nanos\n", .{movgen.CALC});
     std.debug.print("moves per second {}\n", .{utils.nps(gen.movelist.items.len, elapsed)});
-    //std.debug.print("CUTOFFS {}", .{movgen.CUTOFFS});
-    //std.debug.print("ONEMOVESKIPS {}", .{movgen.ONESKIPS});
+    //std.debug.print("ONEKIPS {}", .{movgen.ONESKIPS});
 
-    // tested: no dups are produced.
-    // var dups: usize = 0;
-    // var map = std.AutoHashMap(std.BoundedArray(scrabble.MoveLetter, 7), void).init(allocator);
-    // for(gen.movelist.items) |mov|
-    // {
-    //     const result = try map.getOrPut(mov.letters);
-    //     if (result.found_existing) dups += 1;
-    // }
-    // std.debug.print("dups {} total mapped {}", .{dups, map.count()});
+    //test: dups are produced.
+    var dups: usize = 0;
+    var map = std.AutoHashMap(std.BoundedArray(scrabble.MoveLetter, 7), void).init(allocator);
+    defer map.deinit();
+    for(gen.movelist.items) |mov|
+    {
+        const result = try map.getOrPut(mov.letters);
+        if (result.found_existing)
+        {
+            //utils.printmove(&board, &mov, settings, null);
+            utils.printmove_only(&mov, settings);
+            //std.debug.print("{}", .{mov.flags.is_crossword_generated});
+            dups += 1;
+        }
+    }
+    std.debug.print("dups {} total mapped {}\n", .{dups, map.count()});
 }
 
+
+
+fn test_slo(allocator: std.mem.Allocator, settings: *const Settings) !void
+{
+
+    const xx: u21 = 'č';
+    std.debug.print("{}", .{@TypeOf(xx)});
+
+    _ = settings;
+    // load text file in memory.
+    const file: std.fs.File = try std.fs.openFileAbsolute("C:\\Data\\ScrabbleData\\slotest.txt", .{});
+    defer file.close();
+
+    const stat = try file.stat();
+    const file_size = stat.size;
+
+    const file_buffer = try file.readToEndAlloc(allocator, file_size);
+    defer allocator.free(file_buffer);
+
+    // Read file line by line
+    var it = std.mem.splitAny(u8, file_buffer, &.{13, 10});
+    while (it.next()) |word|
+    {
+        if (word.len == 0) continue;
+        const view: std.unicode.Utf8View = try std.unicode.Utf8View.init(word);
+        var uni = view.iterator();
+        while (uni.nextCodepoint()) |u|
+        {
+            std.debug.print("[{u}]={} / ", .{u ,u});
+        }
+        std.debug.print("\n", .{});
+    }
+
+}

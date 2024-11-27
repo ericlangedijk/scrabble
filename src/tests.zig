@@ -64,6 +64,7 @@ pub const RndGame = struct
 
     pub fn play(self: *RndGame) !void
     {
+        //utils.print_bag(&self.bag, self.settings);
         var total_moves: usize = 0;
         var total_time: u64 = 0;
         var total_score: u32 = 0;
@@ -83,29 +84,49 @@ pub const RndGame = struct
             const elapsed = timer.lap();
             total_time += elapsed;
             total_score += bestmove.score;
+          //  utils.print_bag(&self.bag, self.settings);
             utils.printmove(&self.board, &bestmove, self.settings, oldrack);
-            std.debug.print("bag: {} left\n", .{self.bag.get_count()});
+            std.debug.print("bag: {} left\n", .{self.bag.str.len});
         }
         std.debug.print("duration without printing: {} milliseconds, total moves generated {}, totalscore {}\n", .{ total_time / 1000000, total_moves, total_score });
     }
 
     fn pick_random(self: *RndGame) bool
     {
-        var pick_count: u9 = 7 - self.rack.count();
+        // for (self.bag.str.slice()) |B|
+        // {
+        //     if (B.is_blank)
+        //     std.debug.print("*", .{})
+        //     else std.debug.print("{c}", .{self.settings.code_to_char(B.charcode)});
+        // }
+        // std.debug.print("\n", .{});
+        const pick_count: u9 = 7 - self.rack.count();
         if (pick_count == 0) return false;
-        var str = self.bag.to_string();
-        if (str.len == 0) return false;
-        if (pick_count > str.len) pick_count = str.len;
+        //if (pick_count > str.len) pick_count = str.len;
 
         for (0..pick_count) |_|
         {
-            if (str.len == 0) break;
-            const idx: u64 = self.rnd.next_u64_range(0, str.len);
-            const letter = str.swapRemove(idx);
+            if (self.bag.str.len == 0) break;
+            const idx: u64 = self.rnd.next_u64_range(0, self.bag.str.len);
+            const letter = self.bag.extract_letter(idx);
             self.rack.add_letter(letter);
-            self.bag.remove_letter(letter);
         }
         return true;
+        // var pick_count: u9 = 7 - self.rack.count();
+        // if (pick_count == 0) return false;
+        // var str = self.bag.to_string();
+        // if (str.len == 0) return false;
+        // if (pick_count > str.len) pick_count = str.len;
+
+        // for (0..pick_count) |_|
+        // {
+        //     if (str.len == 0) break;
+        //     const idx: u64 = self.rnd.next_u64_range(0, str.len);
+        //     const letter = str.swapRemove(idx);
+        //     self.rack.add_letter(letter);
+        //     self.bag.remove_letter(letter);
+        // }
+        // return true;
     }
 
     fn make_move(self: *RndGame, move: Move) void
