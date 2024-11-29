@@ -52,37 +52,33 @@ fn run(allocator: std.mem.Allocator)!void
 
     var settings = try Settings.init(allocator, .Dutch);
     defer settings.deinit();
-    //var g: gaddag.Graph = try gaddag.load_graph_from_text_file("C:\\Data\\ScrabbleData\\slo.txt", allocator, &settings);
-    // try gaddag.save_graph_to_bin_file(&g, "C:\\Data\\ScrabbleData\\nl.bin");
+    //var g: gaddag.Graph = try gaddag.load_graph_from_text_file("C:\\Data\\ScrabbleData\\nl.txt", allocator, &settings);
+    //try gaddag.save_graph_to_bin_file(&g, "C:\\Data\\ScrabbleData\\nl.bin");
     var g: gaddag.Graph = try gaddag.load_graph_from_bin_file("C:\\Data\\ScrabbleData\\nl.bin", allocator, &settings);
     defer g.deinit();
     try g.validate();
 
     //std.debug.print("{}\n", .{g.word_exists("virgotočasen")});
 
-    //try test_random_game(allocator, &settings, &g);
-    try test_board(allocator, &settings, &g);
+    try test_random_game(allocator, &settings, &g);
+    //try test_board(allocator, &settings, &g);
 }
 
 fn test_random_game(allocator: std.mem.Allocator, settings: *const Settings, graph: *Graph) !void
 {
-    var game: tests.RndGame = try tests.RndGame.init(allocator, settings, graph);
+    // std.debug.print("{u}\n", .{'🤮'});
+   //std.debug.print("\x1b[43;30m A \x1b[0m\n", .{});
+//    std.debug.print("\x1b[43;30m a \x1b[0m\n", .{});
+
+    var game: tests.RndGame = try tests.RndGame.init(allocator, settings, graph, 1);
     defer game.deinit();
-    for (0..100) |_|
+    for (0..1) |_|
     {
-        const ok: bool = try game.play(false);
+        const ok: bool = try game.play(true, 1);
         if (!ok) break;
     }
 }
 
-fn readline() !void
-{
-    // Wait for the user to press Enter before exiting
-    const stdin = std.io.getStdIn().reader();
-    //try stdout.print("Press Enter to continue...\n", .{});
-    var buffer: [256]u8 = undefined; // Buffer for input
-    _ = try stdin.readUntilDelimiter(&buffer, '\n'); // Read until Enter is pressed
-}
 
 fn test_board(allocator: std.mem.Allocator, settings: *const Settings, graph: *Graph) !void
 {
@@ -91,78 +87,58 @@ fn test_board(allocator: std.mem.Allocator, settings: *const Settings, graph: *G
     // std.debug.print("{u}\n\n", .{xx});
 
     var board: scrabble.Board = scrabble.Board.init(settings);
-
-    // the combi for our default test 45255 moves
-    // board.set_string(settings, 112, "zend", .Horizontal);
-    // board.set_string(settings, 112, "zag", .Vertical);
-    // var rack = try scrabble.Rack.init_string(settings, "talen"); // this
-    // rack.blanks = 2;
-
-    if (true)
-    {
-    //    board.set(112, 'd');
-        //board.set(113, 'e');
-        //board.set(114, 'n');
-        //board.set(115, 'd');
-        //board.set(113, 'l');
-    }
-    //board.set_string(settings, 105, "zendinstallati", .Horizontal);
-    //board.set_string(settings, 106, "endinstallati", .Horizontal);
-    try board.set_string(settings, 112, "zend", .Horizontal);
-    try board.set_string(settings, 112, "zag", .Vertical);
-
-    //try board.set_string(settings, 105, "zend", .Horizontal);
-    //try board.set_string(settings, 111, "sta", .Horizontal);
-    //try board.set_string(settings, 118, "ie", .Horizontal);
-            //zendinstallatie
-
-    //aanbiddelijkste
-
-    utils.printboard(&board);
-
+    var rack = scrabble.Rack.init();
     var gen = try MovGen.init(allocator, settings, graph, null);
     defer gen.deinit();
 
-    //const ok = gen.do_crosscheck(&board, 116, settings.char_to_code('t'), .Horizontal);
-    //std.debug.print("crosscheck {}\n", .{ok});
 
-    //if (true) return;
+    //board.set_string(settings, 105, "zendinstallati", .Horizontal);
+    //board.set_string(settings, 106, "endinstallati", .Horizontal);
+    //try board.set_string(settings, 105, "zend", .Horizontal);
+    //try board.set_string(settings, 111, "sta", .Horizontal);
+    //try board.set_string(settings, 118, "ie", .Horizontal);
 
-    //var total: u64 = 0;
-    var rack = try scrabble.Rack.init_string(settings, "talen"); // this
-    rack.blanks = 2;
+    const case: u8 = 1;
+    switch (case)
+    {
+        1 =>
+        {
+            try board.set_string(settings, 112, "zend", .Horizontal);
+            try board.set_string(settings, 112, "zag", .Vertical);
+            try rack.set_string(settings, "talen", 2);
+        },
+        2 =>
+        {
+            try board.set_string(settings, 112, "tonaler", .Horizontal);
+            try rack.set_string(settings, "lyobeoi", 0);
+        },
+        else => {}
+    }
 
-    // gen.monolithic_gen(&board, &rack, .Horizontal);
-    // if (true) return;
+    utils.printboard(&board);
+    utils.print_rack(rack, settings);
 
     var timer: std.time.Timer = try std.time.Timer.start();
-    //gen.gen_rack_moves(&board, 0, 112, graph.get_rootnode(), rack, scrabble.Move.EMPTY);
     gen.generate_moves(&board, &rack);
-
-
     const elapsed = timer.lap();
-    //gen.sort();
-
 
     var idx: usize = 0;
     for (gen.movelist.items) |*m|
     {
         //if (m.flags.is_crossword_generated and scrabble.square_x(m.anchor) == 11 and !m.flags.is_horizontally_generated and m.letters.len == 7)// and m.letters.len == 4)// and m.flags.is_crossword_generated and m.first().square == 98)
-        if (m.letters.len == 1)
+        if (m.find(119) != null)
         {
             //_ = m;
             //utils.printmove_only(m, settings);
-            utils.printmove(&board, m, null);
+            //utils.printmove(&board, m, null);
             idx += 1;
         }
         //if (idx > 20) break;
     }
-
     var total: u32 = 0;
     for(gen.movelist.items) |move|
     {
         total += move.score;
-
     }
 
     std.debug.print("\n\ngenerate {} moves time ms {} {} nanos sum-score {}\n", .{ gen.movelist.items.len, elapsed / 1000000, elapsed, total });
@@ -170,22 +146,22 @@ fn test_board(allocator: std.mem.Allocator, settings: *const Settings, graph: *G
     std.debug.print("moves per second {}\n", .{utils.nps(gen.movelist.items.len, elapsed)});
     //std.debug.print("ONEKIPS {}", .{movgen.ONESKIPS});
 
-    //test: dups are produced.
-    var dups: usize = 0;
-    var map = std.AutoHashMap(std.BoundedArray(scrabble.MoveLetter, 7), void).init(allocator);
-    defer map.deinit();
-    for(gen.movelist.items) |mov|
-    {
-        const result = try map.getOrPut(mov.letters);
-        if (result.found_existing)
-        {
-            //utils.printmove(&board, &mov, settings, null);
-            utils.printmove_only(&mov, settings);
-            //std.debug.print("{}", .{mov.flags.is_crossword_generated});
-            dups += 1;
-        }
-    }
-    std.debug.print("dups {} total mapped {}\n", .{dups, map.count()});
+    // test if dups are produced.
+    // var dups: usize = 0;
+    // var map = std.AutoHashMap(std.BoundedArray(scrabble.MoveLetter, 7), void).init(allocator);
+    // defer map.deinit();
+    // for(gen.movelist.items) |mov|
+    // {
+    //     const result = try map.getOrPut(mov.letters);
+    //     if (result.found_existing)
+    //     {
+    //         //utils.printmove(&board, &mov, settings, null);
+    //         utils.printmove_only(&mov, settings);
+    //         //std.debug.print("{}", .{mov.flags.is_crossword_generated});
+    //         dups += 1;
+    //     }
+    // }
+    // std.debug.print("dups {} total mapped {}\n", .{dups, map.count()});
 }
 
 
@@ -230,7 +206,7 @@ const builtin = @import("builtin");
 
 const UTF8ConsoleOutput = struct
 {
-    original: ?c_uint = null, // cowboy
+    original: ?c_uint = null,
 
     fn init() UTF8ConsoleOutput
     {
@@ -260,3 +236,11 @@ pub fn krak() !void {
     //print("\u{00a9}", .{});
 }
 
+fn readline() !void
+{
+    // Wait for the user to press Enter before exiting
+    const stdin = std.io.getStdIn().reader();
+    //try stdout.print("Press Enter to continue...\n", .{});
+    var buffer: [256]u8 = undefined; // Buffer for input
+    _ = try stdin.readUntilDelimiter(&buffer, '\n'); // Read until Enter is pressed
+}

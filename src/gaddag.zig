@@ -429,6 +429,7 @@ pub const Graph = struct
             for (0..prefix.len) |j|
             {
                 node = try self.add_or_get_node(node, prefix.get(j), false);
+                // if (j == 0 and word_len == 1) node.data.is_whole_word = true; NOPE
 
                 // At the end of the prefix.
                 if (j == prefix.len - 1)
@@ -447,7 +448,7 @@ pub const Graph = struct
                     // Switch to bow and add suffix.
                     var suffix = bow_node orelse return ScrabbleError.GaddagBuildError;
                     // I think this allows for 1-letter words.
-                    if (word_len == 1) suffix.data.is_eow = true;
+                    //if (word_len == 1) suffix.data.is_eow = true;
                     for (j + 1..word_len) |k|
                     {
                         suffix = try self.add_or_get_node(suffix, buf.get(k), false);
