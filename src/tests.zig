@@ -46,7 +46,7 @@ pub const RndGame = struct
             .rnd = if (seed) |s| Random.init(s) else Random.init_randomized(),
             .gen = try MovGen.init(allocator, settings, graph, move_event),
             .bag = Bag.init(settings),
-            .board = Board.init(settings),
+            .board = try scrabble.init_default_scrabbleboard(allocator, settings),
             .rack = Rack.EMPTY,
             .hash = MoveHashMap.init(allocator),
         };
@@ -54,6 +54,7 @@ pub const RndGame = struct
 
     pub fn deinit(self: *RndGame) void
     {
+        self.board.deinit();
         self.gen.deinit();
         self.hash.deinit();
     }
@@ -68,8 +69,8 @@ pub const RndGame = struct
 
     pub fn play(self: *RndGame, comptime display: bool, new_seed: ?u64) !bool
     {
-        //if (display) std.debug.print("RND: {}", .{self.rnd.seed});
         if (new_seed) |s| self.rnd.reset_seed(s);
+        std.debug.print("seed: {}", .{self.rnd.seed});
         self.board.clear();
         self.bag.reset(self.settings);
         self.rack.clear();
@@ -77,6 +78,7 @@ pub const RndGame = struct
         var total_time: u64 = 0;
         var gen_time: u64 = 0;
         var total_score: u32 = 0;
+        var moves_played: u32 = 0;
         while (true)
         {
             bestmove = Move.EMPTY;
@@ -84,7 +86,7 @@ pub const RndGame = struct
             if (!picked) break;
             const oldrack: Rack = self.rack;
             var timer: std.time.Timer = try std.time.Timer.start();
-            self.gen.generate_moves(&self.board, &self.rack);
+            self.gen.gen_moves(&self.board, &self.rack);
             gen_time += timer.read();
             const has_moves = self.gen.movelist.items.len > 0;
             if (!has_moves) break;
@@ -92,12 +94,14 @@ pub const RndGame = struct
             total_moves += self.gen.movelist.items.len;
             self.make_move(bestmove);
             total_time += timer.read();
+            moves_played += 1;
             total_score += bestmove.score;
-            if (display) utils.printmove(&self.board, &bestmove, oldrack);
-            if (display) std.debug.print("bag: {} left\n", .{self.bag.str.len});
+            if (display) utils.print_board_ex(&self.board, &bestmove, &oldrack, &self.bag);
+            //if (display) std.debug.print("bag: {} left\n", .{self.bag.str.len});
             // todo: check duplicates.
         }
         //if (display)
+        std.debug.print("moves played: {}\n", .{ moves_played });
         std.debug.print("duration without printing: {} milliseconds, total moves generated {}, totalscore {}\n", .{ total_time / 1000000, total_moves, total_score });
         //if (display)
         std.debug.print("avg moves per second: {}\n", .{ utils.nps(total_moves, gen_time) });

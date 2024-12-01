@@ -2,3 +2,5 @@
 main.exe
 main.exe.obj
 main.pdb
+defs.zig
+engine.zig

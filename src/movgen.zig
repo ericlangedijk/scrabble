@@ -19,7 +19,13 @@ const gaddag = @import("gaddag.zig");
 const Graph = gaddag.Graph;
 const Node = gaddag.Node;
 
-const MoveStoredEvent = fn(move: *const Move) void; // TODO: we need context.
+const MoveStoredEvent = fn (move: *const Move) void; // TODO: we need context.
+
+// comptime MovGen:
+// comptime contrained: bool,
+// comptime justcount: bool,
+// comptime justcount_one: bool
+// comptime event: MoveStoredEvent
 
 /// A fast movegenerator. 3.2 million moves per second measured.\
 /// As far as I know it generates all possible moves for any situation. And produces no duplicates.
@@ -30,7 +36,7 @@ pub const MovGen = struct
     allocator: std.mem.Allocator,
     settings: *const Settings,
     graph: *const Graph,
-    squareinfo: [Board.LEN]SquareInfo,
+    squareinfo: [512]SquareInfo, // = max
     movelist: std.ArrayList(Move),
     event: ?*const MoveStoredEvent,
 
@@ -47,9 +53,9 @@ pub const MovGen = struct
         };
     }
 
-    fn create_squareinfo_cache() [Board.LEN]SquareInfo
+    fn create_squareinfo_cache() [512]SquareInfo
     {
-        var result: [Board.LEN]SquareInfo = undefined;
+        var result: [512]SquareInfo = undefined;
         for (&result) |*s|
         {
             s.* = SquareInfo.init_empty();
@@ -62,18 +68,31 @@ pub const MovGen = struct
         self.movelist.deinit();
     }
 
-    pub fn generate_moves(self: *MovGen, board: *const Board, rack: *const Rack) void
+    pub fn gen_moves(self: *MovGen, board: *const Board, rack: *const Rack) void
     {
-        assert(rack.letters.len + rack.blanks <= 7);
+        self.reset();
 
-        // Always clear history.
+        if (rack.count() == 0) return;
+
+        if (board.is_start_position())
+        {
+            self.gen_rack_moves(board, 0, board.startsquare, self.graph.get_rootnode(), rack, Move.init_with_anchor(board.startsquare));
+        }
+        else
+        {
+            self.process_anchors(board, rack);
+        }
+    }
+
+    pub fn constraint_search(self: *MovGen, board: *const Board, rack: *const Rack) void
+    {
         self.reset();
 
         if (rack.letters.len == 0) return;
 
         if (board.is_start_position())
         {
-            self.gen_rack_moves(board, 0, Board.STARTSQUARE, self.graph.get_rootnode(), rack, Move.init_with_anchor(Board.STARTSQUARE));
+            self.gen_rack_moves(board, 0, board.startsquare, self.graph.get_rootnode(), rack, Move.init_with_anchor(board.startsquare));
         }
         else
         {
@@ -93,7 +112,7 @@ pub const MovGen = struct
 
     fn reset(self: *MovGen) void
     {
-        // When progressing a game, we should *not* clear this...
+        // When progressing a game, we should *not* clear all. The disabled letters stay disabled.
         for (&self.squareinfo) |*s|
         {
             s.* = SquareInfo.init_empty();
@@ -103,12 +122,13 @@ pub const MovGen = struct
 
     /// Process each anchor square.
     fn process_anchors(self: *MovGen, board: *const Board, rack: *const Rack) void
-    {
+     {
         const root: *const Node = self.graph.get_rootnode();
 
         // horz
-        for (Board.ALL_SQUARES) |square|
+        for (0..board.length) |i|
         {
+            const square: scrabble.Square = @intCast(i);
             if (!board.is_eow(square, .Horizontal)) continue;
             const inf: *SquareInfo = &self.squareinfo[square];
             self.gen(board, square, root, rack, &Move.init_with_anchor(square), 0, .Horizontal, .Backwards);
@@ -117,8 +137,9 @@ pub const MovGen = struct
         }
 
         // vert
-        for (Board.ALL_SQUARES) |square|
+        for (0..board.length) |i|
         {
+            const square: scrabble.Square = @intCast(i);
             if (!board.is_eow(square, .Vertical)) continue;
             const inf: *SquareInfo = &self.squareinfo[square];
             self.gen(board, square, root, rack, &Move.init_with_anchor(square), 0, .Vertical, .Backwards);
@@ -127,8 +148,9 @@ pub const MovGen = struct
         }
 
         // horz crosswords
-        for (Board.ALL_SQUARES) |square|
+        for (0..board.length) |i|
         {
+            const square: scrabble.Square = @intCast(i);
             if (!board.is_crossword_anchor(square, .Horizontal)) continue;
             const inf: *SquareInfo = &self.squareinfo[square];
             self.gen(board, square, root, rack, &Move.init_with_anchor(square), IS_CROSSGEN, .Horizontal, .Backwards);
@@ -138,8 +160,9 @@ pub const MovGen = struct
         }
 
         // vert crosswords
-        for (Board.ALL_SQUARES) |square|
+        for (0..board.length) |i|
         {
+            const square: scrabble.Square = @intCast(i);
             if (!board.is_crossword_anchor(square, .Vertical)) continue;
             const inf: *SquareInfo = &self.squareinfo[square];
             self.gen(board, square, root, rack, &Move.init_with_anchor(square), IS_CROSSGEN, .Vertical, .Backwards);
@@ -158,24 +181,26 @@ pub const MovGen = struct
 
         if (board.get_letter(square)) |boardletter|
         {
-            const node: ?*const Node = self.graph.find_node(inputnode, boardletter.charcode);
+            const node: *const Node = self.graph.find_node(inputnode, boardletter.charcode) orelse return;
             self.go_on(board, square, boardletter, node, rack, move, flags & NOT_IS_TRY, ori, dir);
         }
         else
         {
-            // Try rack letters. Maintain a trymask, preventing trying the same letter on the same square more than once.
-            // "Fake initialize" the trymask with already disabled charcodes.
+            if (rack.count() == 0) return;
+            @prefetch(self.graph.get_children_ptr(inputnode), .{});
+            // Try rack letters.
             if (rack.letters.len > 0)
             {
                 var trymask: CharCodeMask = inf.get_excluded_mask(ori); // required filter! (see crosscheck)
                 for (rack.letters.slice(), 0..) |rackletter, idx|
                 {
-                    if (trymask.isSet(rackletter)) continue;
+                    if (trymask.isSet(rackletter)) continue; // prevent trying the same letter on the same square more than once
                     trymask.set(rackletter);
                     const trynode: *const Node = self.graph.find_node(inputnode, rackletter) orelse continue;
                     const tryletter: Letter = Letter.normal(rackletter);
                     const tryrack: Rack = rack.removed(idx);
-                    const trymove: Move = move.added(tryletter, square, dir);
+                    //const trymove: Move = move.added(tryletter, square, dir);
+                    const trymove: Move = move.appended_or_inserted(tryletter, square, dir);
                     self.go_on(board, square, tryletter, trynode, &tryrack, &trymove, flags | IS_TRY, ori, dir);
                 }
             }
@@ -186,30 +211,28 @@ pub const MovGen = struct
                 const children = self.graph.get_children(inputnode);
                 for (children) |*child|
                 {
-                    if (child.data.code == 0) continue; // important: skip bow nodes
-                    if (excluded_mask.isSet(child.data.code)) continue;
+                    if (excluded_mask.isSet(child.data.code)) continue; // The excluded_mask is initialized with bit 0 set, so we always skip bow nodes (with code = 0).
+                    assert(child.data.code != 0);
                     const tryletter: Letter = Letter.blank(child.data.code);
                     const tryrack: Rack = rack.removed_blank();
-                    const trymove: Move = move.added(tryletter, square, dir);
+                    //const trymove: Move = move.added(tryletter, square, dir);
+                    const trymove: Move = move.appended_or_inserted(tryletter, square, dir);
                     self.go_on(board, square, tryletter, child, &tryrack, &trymove, flags | IS_TRY, ori, dir);
                 }
             }
         }
     }
 
-    /// Depending on orientation and direction go to the next square. Note that `go_on` always has to be called from `gen`, even if `inputnode` is null.\
-    /// We can have a pending move that has to be stored.
-    fn go_on(self: *MovGen, board: *const Board, square: Square, letter: Letter, inputnode: ?*const Node, rack: *const Rack, move: *const Move, comptime flags: GenFlags, comptime ori: Orientation, comptime dir: Direction) void
+    /// Depending on orientation and direction go to the next square.
+    fn go_on(self: *MovGen, board: *const Board, square: Square, letter: Letter, node: *const Node, rack: *const Rack, move: *const Move, comptime flags: GenFlags, comptime ori: Orientation, comptime dir: Direction) void
     {
         assert(letter.is_filled());
         assert(!self.squareinfo[square].is_processed(ori)); // this should never happen. tracked and confirmed.
 
         // Check dead end or check store pending move.
-        if (!self.try_this(board, square, letter, inputnode, move, flags, ori, dir)) return;
+        if (!self.try_this(board, square, letter, node, move, flags, ori, dir)) return;
 
-        const node: *const Node = inputnode orelse return;
-
-        if (scrabble.next_square(square, ori, dir)) |nextsquare|
+        if (board.next_square(square, ori, dir)) |nextsquare|
         {
             self.gen(board, nextsquare, node, rack, move, flags, ori, dir);
         }
@@ -217,9 +240,9 @@ pub const MovGen = struct
         // Magic recursive turnaround: we go back to the anchor square (eow) (or the special crossword anchor). and check we can put a letter after that. Switch to bow!
         if (dir == .Backwards)
         {
-            if (board.is_next_free(square, ori, dir) and board.is_next_free(move.anchor, ori, .Forwards))
+            if (board.is_free(square, ori, dir) and board.is_free(move.anchor, ori, .Forwards))
             {
-                const after_anchor: Square = scrabble.next_square(move.anchor, ori, .Forwards) orelse return; // we can be at the board border.
+                const after_anchor: Square = board.next_square(move.anchor, ori, .Forwards) orelse return; // we can be at the board border.
                 const anchornode: *const Node = self.graph.get_bow(node) orelse return;
                 self.gen(board, after_anchor, anchornode, rack, move, flags, ori, .Forwards);
             }
@@ -227,20 +250,16 @@ pub const MovGen = struct
     }
 
     /// If we have a dead end (crossword error) the result is false. Otherwise check store pending move.
-    fn try_this(self: *MovGen, board: *const Board, square: Square, tryletter: Letter, inputnode: ?*const Node, move: *const Move, comptime flags: GenFlags, comptime ori: Orientation, comptime dir: Direction) bool
-    {
-        if (move.letters.len == 0) return true;
-        const node: *const Node = inputnode orelse return true; // TODO: still wondering if i am missing pending moves.
-        const is_try = flags & IS_TRY != 0;
-
+    fn try_this(self: *MovGen, board: *const Board, square: Square, tryletter: Letter, node: *const Node, move: *const Move, comptime flags: GenFlags, comptime ori: Orientation, comptime dir: Direction) bool
+     {
         // Check dead end.
-        if (is_try and !self.cross_check(board, square, tryletter.charcode, ori)) return false;
+        if (flags & IS_TRY != 0 and !self.cross_check(board, square, tryletter.charcode, ori)) return false;
 
         // Check store pending move.
         switch (dir)
         {
-            .Forwards => if (node.data.is_eow and board.is_next_free(square, ori, dir)) self.store_move(board, move, ori, flags, false),
-            .Backwards => if (node.data.is_bow and node.data.is_whole_word and board.is_next_free(square, ori, dir)) self.store_move(board, move, ori, flags, false),
+            .Forwards => if (node.data.is_eow and board.is_free(square, ori, dir)) self.store_move(board, move, ori, flags, false),
+            .Backwards => if (node.data.is_bow and node.data.is_whole_word and board.is_free(square, ori, dir)) self.store_move(board, move, ori, flags, false),
         }
         return true;
     }
@@ -250,7 +269,7 @@ pub const MovGen = struct
     fn cross_check(self: *MovGen, board: *const Board, square: Square, trycharcode: CharCode, comptime ori: Orientation) bool
     {
         const inf: *SquareInfo = &self.squareinfo[square];
-        assert(!inf.is_charcode_excluded(trycharcode, ori)); // this should never happen. tracked and confirmed.
+        assert(!inf.is_charcode_excluded(trycharcode, ori)); // this should never happen. tries must be pre-checked.
         if (inf.is_charcode_included(trycharcode, ori)) return true;
         const ok: bool = self.do_crosscheck(board, square, trycharcode, ori);
         if (ok) inf.mark_charcode_included(trycharcode, ori) else inf.mark_charcode_excluded(trycharcode, ori);
@@ -258,7 +277,7 @@ pub const MovGen = struct
     }
 
     /// Checks valid crossword for the *opposite* orientation of `ori`.
-    pub fn do_crosscheck(self: *MovGen, board: *const Board, q: Square, trycharcode: CharCode,  comptime ori: Orientation) bool
+    pub fn do_crosscheck(self: *MovGen, board: *const Board, q: Square, trycharcode: CharCode, comptime ori: Orientation) bool
     {
         // example: ". . i n s t _ n c e . ." (only "a" will succeed).
         const opp: Orientation = ori.opp();
@@ -303,7 +322,8 @@ pub const MovGen = struct
 
     fn store_move(self: *MovGen, board: *const Board, move: *const Move, comptime ori: Orientation, comptime flags: GenFlags, comptime is_first_move: bool) void
     {
-        assert(move.letters.len > 0);
+        //assert(move.letters.len > 0);
+        if (move.letters.len == 0) return;
 
         if (flags & IS_CROSSGEN != 0 and move.letters.len == 1) return;
 
@@ -312,18 +332,19 @@ pub const MovGen = struct
         if (!is_first_move)
         {
             // Unfortunately we have to do a little filtering here to prevent duplicate one-letter moves. These are quite rare.
-            if (move.letters.len == 1)
+            if (storedmove.letters.len == 1)
             {
-                const first = move.first();
+                const first = storedmove.first();
                 const inf = &self.squareinfo[first.square];
                 if (inf.is_one_mask_set(first.letter)) return;
                 inf.mark_one_mask_set(first.letter);
             }
-            storedmove.score = scrabble.calculate_score(self.settings, board, move, ori);
+            //if (storedmove.letters.len > 1) storedmove.sort(); // SORTING here is slower than choosing insert / append during move generation.
+            storedmove.score = scrabble.calculate_score(self.settings, board, &storedmove, ori);
         }
         else
         {
-            storedmove.score = scrabble.calculate_score_on_empty_board(self.settings, move);
+            storedmove.score = scrabble.calculate_score_on_empty_board(self.settings, board, &storedmove);
         }
 
         storedmove.set_flags(ori, flags & IS_CROSSGEN != 0);
@@ -336,13 +357,13 @@ pub const MovGen = struct
     /// in `store_rack_moves` we make clones of each generate move (rotated and shifted) connected to the startsquare.
     fn gen_rack_moves(self: *MovGen, board: *const Board, depth: u8, q: Square, inputnode: ?*const Node, rack: *const Rack, move: Move) void
     {
+        if (self.movelist.items.len >= MAX_MOVES) return;
         const node = inputnode orelse return;
         if (node.count == 0) return;
         const graph = self.graph;
 
         // Try letters.
-        if (rack.letters.len > 0)
-        {
+        if (rack.letters.len > 0) {
             var tried_mask: CharCodeMask = CharCodeMask.initEmpty();
             for (rack.letters.slice(), 0..) |rackletter, i|
             {
@@ -350,7 +371,8 @@ pub const MovGen = struct
                 tried_mask.set(rackletter);
                 if (graph.find_node(node, rackletter)) |childnode|
                 {
-                    const newmove: Move = move.ret_add(rackletter, false, q);
+                    const letter: Letter = Letter.init(rackletter, false);
+                    const newmove: Move = move.appended(letter, q);
                     if (childnode.data.is_eow) self.store_rack_moves(board, newmove);
                     const passnode: ?*const Node = if (depth > 0) childnode else graph.get_bow(childnode);
                     self.gen_rack_moves(board, depth + 1, q + 1, passnode, &rack.removed(i), newmove);
@@ -359,14 +381,14 @@ pub const MovGen = struct
         }
 
         // Try blanks.
-        if (rack.blanks > 0)
-        {
+        if (rack.blanks > 0) {
             const children = graph.get_children(node);
-            for(children) |*childnode|
+            for (children) |*childnode|
             {
                 const charcode = childnode.data.code;
-                if (charcode == 0) continue;
-                const newmove: Move = move.ret_add(charcode, true, q);
+                if (charcode == 0) continue; // skip bow node
+                const letter: Letter = Letter.init(charcode, true);
+                const newmove: Move = move.appended(letter, q);
                 if (childnode.data.is_eow) self.store_rack_moves(board, newmove);
                 const passnode: ?*const Node = if (depth > 0) childnode else graph.get_bow(childnode);
                 self.gen_rack_moves(board, depth + 1, q + 1, passnode, &rack.removed_blank(), newmove);
@@ -377,39 +399,40 @@ pub const MovGen = struct
     /// Dedicated routine for rack generated moves, shifting and rotating.
     fn store_rack_moves(self: *MovGen, board: *const Board, move: Move) void
     {
-        // TODO: validate board
+        // TODO: validate board length
         const count = move.count();
         var shifted_move: Move = move;
         shifted_move.set_flags(.Horizontal, false);
         for (0..count) |_|
         {
             _ = self.store_move(board, &shifted_move, .Horizontal, 0, true);
-            shifted_move.shift_left(.Horizontal);
+            shifted_move.shift_left(board, .Horizontal);
         }
 
         var rotated_move: Move = move;
-        rotated_move.rotate();
+        rotated_move.rotate(board);
         shifted_move.set_flags(.Vertical, false);
         for (0..count) |_|
         {
             _ = self.store_move(board, &rotated_move, .Vertical, 0, true);
-            rotated_move.shift_left(.Vertical);
+            rotated_move.shift_left(board, .Vertical);
         }
     }
 };
 
-
-/// During processing this struct is updated for speedups, preventing duplicate moves. The functions are just easy-to-read additions.
+/// During processing this struct is updated for shortcuts, speedups and preventing duplicate moves. The functions are just easy-to-read additions.
 pub const SquareInfo = struct
 {
     const EMPTY: SquareInfo = SquareInfo.init_empty();
 
     const EMPTY_ONEMASK = std.bit_set.IntegerBitSet(64).initEmpty();
 
+    const EMPTY_EXCLUDED_MASK: CharCodeMask = @bitCast(@as(u32, 1));
+
     pub const OrientedInfo = struct
     {
         /// Cache for invalid letters during croschecks.
-        excluded_charcodes: CharCodeMask = CharCodeMask.initEmpty(),
+        excluded_charcodes: CharCodeMask = EMPTY_EXCLUDED_MASK, //CharCodeMask.initEmpty(),
         /// Cache for valid letters during croschecks.
         included_charcodes: CharCodeMask = CharCodeMask.initEmpty(),
         /// Flag when anchor is processed.
@@ -427,7 +450,7 @@ pub const SquareInfo = struct
 
     fn init_empty() SquareInfo
     {
-        return SquareInfo { .horz = OrientedInfo {}, .vert = OrientedInfo {}, .one_mask = EMPTY_ONEMASK };
+        return SquareInfo{ .horz = OrientedInfo{}, .vert = OrientedInfo{}, .one_mask = EMPTY_ONEMASK };
     }
 
     fn is_processed(self: *const SquareInfo, comptime ori: Orientation) bool
@@ -448,7 +471,7 @@ pub const SquareInfo = struct
         }
     }
     fn is_processed_by_crossword(self: *const SquareInfo, comptime ori: Orientation) bool
-    {
+     {
         return switch (ori)
         {
             .Horizontal => self.horz.is_processed_by_crossword,
@@ -539,3 +562,54 @@ const IS_CROSSGEN: GenFlags = 1 << 1;
 const NOT_IS_TRY: GenFlags = ~IS_TRY;
 const NOT_IS_CROSSGEN: GenFlags = ~IS_CROSSGEN;
 
+
+
+
+// anchor(square), move contains(square), minlay, maxlay, move contains(letters)
+pub const Constraints = struct {
+    anchor: ?Square = null,
+    min_score: ?u16 = null,
+    max_score: ?u16 = null,
+    min_layed: ?u4 = null,
+    max_layed: ?u4 = null,
+    contains_charmask: ?CharCodeMask = null,
+    // word_mask
+
+    //not_contains_charcode: ?CharCodeMask = null,
+    //containe_square: ?std.BoundedArray(Square, 7) = null,
+    //not_containe_square: ?std.BoundedArray(Square, 7) = null,
+
+    //square_filter
+
+    pub fn matches(self: *const Constraints, move: *const Move) bool {
+        if (self.anchor) |a| {
+            if (move.anchor == a) return true;
+        }
+
+        if (self.min_score) |min| {
+            if (move.score >= min) return true;
+        }
+
+        if (self.max_score) |max| {
+            if (move.score <= max) return true;
+        }
+
+        if (self.min_layed) |min| {
+            if (move.letters.len >= min) return true;
+        }
+
+        if (self.max_layed) |max| {
+            if (move.letters.len <= max) return true;
+        }
+
+        //if (self.contains_charcode != null or self.)
+
+        if (self.contains_charmask) |positive| {
+            const movemask: CharCodeMask = move.to_charcode_mask();
+            const intersection = movemask.intersectWith(positive);
+            if (intersection.mask != 0) return true;
+        }
+
+        return false;
+    }
+};

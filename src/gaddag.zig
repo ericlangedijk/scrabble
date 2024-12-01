@@ -43,7 +43,7 @@ pub fn load_graph_from_text_file(filename: []const u8, allocator: std.mem.Alloca
     while (it.next()) |word|
     {
         //std.debug.print("[{s}]\n", .{word});
-        if (word.len == 0) continue; // skip empty (split any is a bit strange)
+        //if (word.len == 0) continue; // skip empty (split any is a bit strange)
         try graph.add_word(word); // TODO: just skip invalid words
     }
 
@@ -60,7 +60,7 @@ pub fn load_graph_from_text_file(filename: []const u8, allocator: std.mem.Alloca
     var found: u32 = 0;
     while (it.next()) |word|
     {
-        if (word.len == 0) continue;
+        if (word.len < 2) continue;
         if (!graph.word_exists(word))
         {
             print("word not found {s}\n", .{word});
@@ -363,6 +363,11 @@ pub const Graph = struct
         return self.nodes.items[parentnode.child_ptr..parentnode.child_ptr + parentnode.count];
     }
 
+    pub fn get_children_ptr(self: *const Graph, parentnode: *const Node) *const Node
+    {
+        return &self.nodes.items[parentnode.child_ptr];
+    }
+
     pub fn word_exists(self: *const Graph, word: []const u8) bool
     {
         return self.find_word(word) != null;
@@ -404,14 +409,16 @@ pub const Graph = struct
     /// TODO: allow one-letter words to be a whole word.
     fn add_word(self: *Graph, word: []const u8) !void
     {
-        self.word_count += 1; // TODO: we are not 100% sure, the word could be a duplicate
 
         const buf = self.settings.encode_word(word) catch return;// catch { std.debug.print("WTF [{s}]\n", .{word}); return; };
         const word_len: usize = buf.len;
+        if (word_len < 2) return;
+
         // var prefix = try std.BoundedArray(CharCode, 32).init(0);
         var prefix: std.BoundedArray(CharCode, 32) = .{};
         //std.debug.print("\nadd: [{s}]\n", .{word});
 
+        self.word_count += 1; // TODO: we are not 100% sure, the word could be a duplicate
         for (0..word_len) |i|
         {
             prefix.len = 0;
@@ -429,7 +436,7 @@ pub const Graph = struct
             for (0..prefix.len) |j|
             {
                 node = try self.add_or_get_node(node, prefix.get(j), false);
-                // if (j == 0 and word_len == 1) node.data.is_whole_word = true; NOPE
+                //if (j == 0 and word_len == 1) node.data.is_whole_word = true; //NOPE
 
                 // At the end of the prefix.
                 if (j == prefix.len - 1)
@@ -531,16 +538,16 @@ pub const Graph = struct
     }
 
     /// private
-    fn get_rootnode_ptr(self: *Graph) *Node
-    {
-        return self.get_node_ptr_by_index(0);
-    }
-
-    /// private
     fn get_node_ptr_by_index(self: *Graph, idx: u32) *Node
     {
         assert(idx < self.nodes.items.len);
         return &self.nodes.items[idx];
+    }
+
+    /// private
+    fn get_rootnode_ptr(self: *Graph) *Node
+    {
+        return self.get_node_ptr_by_index(0);
     }
 
     /// private
