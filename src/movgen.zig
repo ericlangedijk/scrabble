@@ -199,7 +199,6 @@ pub const MovGen = struct
                     const trynode: *const Node = self.graph.find_node(inputnode, rackletter) orelse continue;
                     const tryletter: Letter = Letter.normal(rackletter);
                     const tryrack: Rack = rack.removed(idx);
-                    //const trymove: Move = move.added(tryletter, square, dir);
                     const trymove: Move = move.appended_or_inserted(tryletter, square, dir);
                     self.go_on(board, square, tryletter, trynode, &tryrack, &trymove, flags | IS_TRY, ori, dir);
                 }
@@ -215,7 +214,6 @@ pub const MovGen = struct
                     assert(child.data.code != 0);
                     const tryletter: Letter = Letter.blank(child.data.code);
                     const tryrack: Rack = rack.removed_blank();
-                    //const trymove: Move = move.added(tryletter, square, dir);
                     const trymove: Move = move.appended_or_inserted(tryletter, square, dir);
                     self.go_on(board, square, tryletter, child, &tryrack, &trymove, flags | IS_TRY, ori, dir);
                 }
@@ -227,17 +225,18 @@ pub const MovGen = struct
     fn go_on(self: *MovGen, board: *const Board, square: Square, letter: Letter, node: *const Node, rack: *const Rack, move: *const Move, comptime flags: GenFlags, comptime ori: Orientation, comptime dir: Direction) void
     {
         assert(letter.is_filled());
-        assert(!self.squareinfo[square].is_processed(ori)); // this should never happen. tracked and confirmed.
+        assert(!self.squareinfo[square].is_processed(ori)); // this should never happen.
 
-        // Check dead end or check store pending move.
-        if (!self.try_this(board, square, letter, node, move, flags, ori, dir)) return;
+        if (flags & IS_TRY != 0 and !self.cross_check(board, square, letter.charcode, ori)) return;
+
+        self.check_store(board, square, node, move, flags, ori, dir);
 
         if (board.next_square(square, ori, dir)) |nextsquare|
         {
             self.gen(board, nextsquare, node, rack, move, flags, ori, dir);
         }
 
-        // Magic recursive turnaround: we go back to the anchor square (eow) (or the special crossword anchor). and check we can put a letter after that. Switch to bow!
+        // Magic recursive turnaround: we go back to the anchor square (eow) (or the crossword anchor). and check we can put a letter after that. Switch to bow!
         if (dir == .Backwards)
         {
             if (board.is_free(square, ori, dir) and board.is_free(move.anchor, ori, .Forwards))
@@ -249,19 +248,14 @@ pub const MovGen = struct
         }
     }
 
-    /// If we have a dead end (crossword error) the result is false. Otherwise check store pending move.
-    fn try_this(self: *MovGen, board: *const Board, square: Square, tryletter: Letter, node: *const Node, move: *const Move, comptime flags: GenFlags, comptime ori: Orientation, comptime dir: Direction) bool
+    /// Check if we can store a pending move (if the square is free and we have a whole word).
+    fn check_store(self: *MovGen, board: *const Board, square: Square, node: *const Node, move: *const Move, comptime flags: GenFlags, comptime ori: Orientation, comptime dir: Direction) void
      {
-        // Check dead end.
-        if (flags & IS_TRY != 0 and !self.cross_check(board, square, tryletter.charcode, ori)) return false;
-
-        // Check store pending move.
         switch (dir)
         {
             .Forwards => if (node.data.is_eow and board.is_free(square, ori, dir)) self.store_move(board, move, ori, flags, false),
             .Backwards => if (node.data.is_bow and node.data.is_whole_word and board.is_free(square, ori, dir)) self.store_move(board, move, ori, flags, false),
         }
-        return true;
     }
 
     /// Cross check using (and filling) cached info. The caching of excluded and included letters saves a *lot* of processing.
@@ -322,9 +316,9 @@ pub const MovGen = struct
 
     fn store_move(self: *MovGen, board: *const Board, move: *const Move, comptime ori: Orientation, comptime flags: GenFlags, comptime is_first_move: bool) void
     {
-        //assert(move.letters.len > 0);
         if (move.letters.len == 0) return;
 
+        // We do not store these, because they will already be handled by normal anchors.
         if (flags & IS_CROSSGEN != 0 and move.letters.len == 1) return;
 
         var storedmove: Move = move.*;

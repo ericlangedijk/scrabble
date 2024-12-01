@@ -119,8 +119,8 @@ fn run(allocator: std.mem.Allocator)!void
 //if (true) return;
     //std.debug.print("{}\n", .{g.word_exists("virgotočasen")});
 
-    //try test_random_game(allocator, &settings, &g);
-    try test_board(allocator, &settings, &g);
+    try test_random_game(allocator, &settings, &g);
+    //try test_board(allocator, &settings, &g);
 }
 
 fn test_random_game(allocator: std.mem.Allocator, settings: *const Settings, graph: *Graph) !void
