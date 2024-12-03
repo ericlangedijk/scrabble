@@ -74,10 +74,10 @@ pub const MovGen = struct
 
     pub fn gen_moves(self: *MovGen, board: *const Board, rack: *const Rack) void
     {
-        var timer = std.time.Timer.start() catch return;
+        //var timer = std.time.Timer.start() catch return;
         self.prepare(board);
-        const e = timer.lap();
-        std.debug.print("prepare {}", .{e});
+        //const e = timer.lap();
+        //std.debug.print("prepare {}", .{e});
 
         if (rack.count() == 0) return;
 
@@ -101,28 +101,46 @@ pub const MovGen = struct
         var iter_up = board.letter_iterator(0, .Vertical, .Backwards, false);
         var iter_down = board.letter_iterator(0, .Vertical, .Forwards, false);
 
-        for (self.squareinfo[0..board.length], 0..) |*s, i|
+        for (self.squareinfo[0..board.length], 0..) |*inf, i|
         {
             const square: Square = @intCast(i);
-            s.* = SquareInfo.EMPTY;
-            s.boardinfo.bwv = board.bwv[square];
-            s.boardinfo.blv = board.blv[square];
-            s.boardinfo.lv = self.settings.lv(board.squares[square]);
+            inf.* = SquareInfo.EMPTY;
+            inf.boardinfo.bwv = board.bwv[square];
+            inf.boardinfo.blv = board.blv[square];
+            inf.boardinfo.lv = self.settings.lv(board.squares[square]);
 
             // Cache sidescores. We only calculate sidescores for empty squares.
             if (board.is_empty(square))
             {
                 iter_left.reset(square);
-                while (iter_left.next()) |B| s.vert.sidescore += self.settings.lv(B.letter);
+                while (iter_left.next()) |B| inf.vert.sidescore += self.settings.lv(B.letter);
 
                 iter_right.reset(square);
-                while (iter_right.next()) |B| s.vert.sidescore += self.settings.lv(B.letter);
+                while (iter_right.next()) |B| inf.vert.sidescore += self.settings.lv(B.letter);
+
+                if (iter_left.current_square() != iter_right.current_square())
+                {
+                    inf.vert.flags.has_cross_letters = true;
+                }
+                else
+                {
+                    inf.vert.flags.can_ignore_crosscheck = true;
+                }
 
                 iter_up.reset(square);
-                while (iter_up.next()) |B| s.horz.sidescore += self.settings.lv(B.letter);
+                while (iter_up.next()) |B| inf.horz.sidescore += self.settings.lv(B.letter);
 
                 iter_down.reset(square);
-                while (iter_down.next()) |B| s.horz.sidescore += self.settings.lv(B.letter);
+                while (iter_down.next()) |B| inf.horz.sidescore += self.settings.lv(B.letter);
+
+                if (iter_up.current_square() != iter_down.current_square())
+                {
+                    inf.horz.flags.has_cross_letters = true;
+                }
+                else
+                {
+                    inf.horz.flags.can_ignore_crosscheck = true;
+                }
             }
         }
     }
@@ -190,7 +208,7 @@ pub const MovGen = struct
     fn gen
     (
         self: *MovGen, board: *const Board,
-        square: Square, inputnode: *const Node, rack: *const Rack, move: *const Move, wordmul: u16, sidescores: u16,
+        square: Square, node: *const Node, rack: *const Rack, move: *const Move, wordmul: u16, sidescores: u16,
         comptime flags: GenFlags, comptime ori: Orientation, comptime dir: Direction
     ) void
     {
@@ -200,14 +218,14 @@ pub const MovGen = struct
 
         if (board.get_letter(square)) |boardletter|
         {
-            const node: *const Node = self.graph.find_node(inputnode, boardletter.charcode) orelse return;
+            const boardnode: *const Node = self.graph.find_node(node, boardletter.charcode) orelse return;
             const go_on_move: Move = move.incremented_score(inf.boardinfo.lv); // increment base score of move.
-            self.go_on(board, square, boardletter, node, rack, &go_on_move, wordmul, sidescores, flags & NOT_IS_TRY, ori, dir);
+            self.go_on(board, square, boardnode, rack, &go_on_move, wordmul, sidescores, boardletter, flags & NOT_IS_TRY, ori, dir);
         }
         else
         {
             if (rack.count() == 0) return;
-            @prefetch(self.graph.get_children_ptr(inputnode), .{});
+            @prefetch(self.graph.get_children_ptr(node), .{});
             // Try rack letters.
             if (rack.letters.len > 0)
             {
@@ -216,19 +234,19 @@ pub const MovGen = struct
                 {
                     if (trymask.isSet(rackletter)) continue; // prevent trying the same letter on the same square more than once
                     trymask.set(rackletter);
-                    const trynode: *const Node = self.graph.find_node(inputnode, rackletter) orelse continue;
+                    const trynode: *const Node = self.graph.find_node(node, rackletter) orelse continue;
                     const tryletter: Letter = Letter.normal(rackletter);
                     const tryrack: Rack = rack.removed(idx);
                     const lv: u8 = self.settings.lv(tryletter) * inf.boardinfo.blv;
                     const trymove: Move = move.appended_or_inserted(tryletter, square, lv, dir);
-                    self.go_on(board, square, tryletter, trynode, &tryrack, &trymove, wordmul * inf.boardinfo.bwv, sidescores, flags | IS_TRY, ori, dir);
+                    self.go_on(board, square, trynode, &tryrack, &trymove, wordmul * inf.boardinfo.bwv, sidescores, tryletter, flags | IS_TRY, ori, dir);
                 }
             }
             // Try blanks.
             if (rack.blanks > 0)
             {
                 const excluded_mask: CharCodeMask = inf.get_excluded_mask(ori); // required filter! (see `cross_check`)
-                const children = self.graph.get_children(inputnode);
+                const children = self.graph.get_children(node);
                 for (children) |*child|
                 {
                     if (excluded_mask.isSet(child.data.code)) continue; // The excluded_mask is initialized with bit 0 set, so we always skip bow nodes (with code = 0).
@@ -236,7 +254,7 @@ pub const MovGen = struct
                     const tryletter: Letter = Letter.blank(child.data.code);
                     const tryrack: Rack = rack.removed_blank();
                     const trymove: Move = move.appended_or_inserted(tryletter, square, 0, dir);
-                    self.go_on(board, square, tryletter, child, &tryrack, &trymove, wordmul * inf.boardinfo.bwv, sidescores, flags | IS_TRY, ori, dir);
+                    self.go_on(board, square, child, &tryrack, &trymove, wordmul * inf.boardinfo.bwv, sidescores, tryletter, flags | IS_TRY, ori, dir);
                 }
             }
         }
@@ -246,7 +264,7 @@ pub const MovGen = struct
     fn go_on
     (
         self: *MovGen, board: *const Board,
-        square: Square, letter: Letter, node: *const Node, rack: *const Rack, move: *const Move, wordmul: u16, sidescores: u16,
+        square: Square, node: *const Node, rack: *const Rack, move: *const Move, wordmul: u16, sidescores: u16, letter: Letter,
         comptime flags: GenFlags, comptime ori: Orientation, comptime dir: Direction
     ) void
     {
@@ -256,14 +274,13 @@ pub const MovGen = struct
         const inf: *SquareInfo = &self.squareinfo[square];
         var this_sidescore: u16 = 0;
 
+        // Check dead end or increment sidescores.
         if (flags & IS_TRY != 0)
         {
-            // Check dead end.
-            if (not(self.cross_check(board, square, letter.charcode, ori))) return;
-            // If ok keep track of the sidescores
-            this_sidescore = inf.get_sidescore(ori);
-            if (this_sidescore > 0) // TODO: score will fail when there are only blanks blank in the crossletters! We need an extra flag.
+            if (not(self.crosscheck(board, square, letter.charcode, ori))) return;
+            if (inf.has_cross_letters(ori))
             {
+                this_sidescore = inf.get_sidescore(ori);
                 this_sidescore += self.settings.lv(letter) * inf.boardinfo.blv; // include the tryletter in the sidescore
                 this_sidescore *= inf.boardinfo.bwv; // and include the bwv
             }
@@ -291,7 +308,7 @@ pub const MovGen = struct
 
     /// Cross check using (and filling) cached info. The caching of excluded and included letters saves a *lot* of processing.
     /// Note that the excluded letters are (and must) already pre-checked during triesin `gen`.\
-    fn cross_check(self: *MovGen, board: *const Board, square: Square, trycharcode: CharCode, comptime ori: Orientation) bool
+    fn crosscheck(self: *MovGen, board: *const Board, square: Square, trycharcode: CharCode, comptime ori: Orientation) bool
     {
         const inf: *SquareInfo = &self.squareinfo[square];
         assert(not(inf.is_charcode_excluded(trycharcode, ori))); // this should never happen. tries must be pre-checked.
@@ -305,21 +322,13 @@ pub const MovGen = struct
     /// Checks valid crossword for the *opposite* orientation of `ori`.
     fn do_crosscheck(self: *MovGen, board: *const Board, q: Square, trycharcode: CharCode, comptime ori: Orientation) bool
     {
-        const inf: *SquareInfo = &self.squareinfo[q];
-
         // example: ". . i n s t _ n c e . ." (only "a" will succeed).
         const opp: Orientation = ori.opp();
-        const check_backwards: bool = board.has_filled_neighbour(q, opp, .Backwards);
-        const check_forwards: bool = board.has_filled_neighbour(q, opp, .Forwards);
 
-        // Nothing to do.
-        if (not(check_backwards or check_forwards))
-        {
-            inf.mark_can_ignore_crosscheck(ori); // Create shortcut.
-            return true;
-        }
+        const check_backwards: bool = board.has_filled_neighbour(q, opp, .Backwards); // TODO: maybe a flag could speed up a little bit
+        const check_forwards: bool = board.has_filled_neighbour(q, opp, .Forwards); // TODO: maybe a flag could speed up a little bit
 
-        // Find root node of the letter (on the "_" square).
+        // Find root node of the tryletter (on the "_" square).
         var node: *const Node = self.graph.find_node_from_root(trycharcode) orelse return false;
 
         // Scan backwards prefix ("tsni")
@@ -508,8 +517,10 @@ pub const SquareInfo = struct
             is_processed: bool = false,
             /// Flag when crossword anchor is processed.
             is_processed_by_crossword: bool = false,
-            /// Flag when we know there is no cross-check needed at all
+            /// Flag when we know there is no cross-check needed at all.
             can_ignore_crosscheck: bool = false,
+            /// Extra flag. Can be used for shortcuts but is needed for sidescores as well: the sidescore can be zero because there are only blanks. We still have to multiply.
+            has_cross_letters: bool = false,
         };
 
         /// Cache for invalid letters during croschecks.
@@ -647,6 +658,15 @@ pub const SquareInfo = struct
             .Horizontal => self.horz.included_charcodes.set(charcode),
             .Vertical => self.vert.included_charcodes.set(charcode),
         }
+    }
+
+    fn has_cross_letters(self: *const SquareInfo, comptime ori: Orientation) bool
+    {
+        return switch (ori)
+        {
+            .Horizontal => self.horz.flags.has_cross_letters,
+            .Vertical => self.vert.flags.has_cross_letters,
+        };
     }
 
     fn get_sidescore(self: *const SquareInfo, comptime ori: Orientation) u16

@@ -59,6 +59,9 @@ moves per second 3452117
 generate 61952 moves time ms 13 13555100 nanos sum-score 948611
 moves per second 4570383
 
+-- a little speedup after correcting crossscore and adding has_crossletters flag.
+generate 61952 moves time ms 13 13148200 nanos sum-score 948611
+moves per second 4711823
 
 
 

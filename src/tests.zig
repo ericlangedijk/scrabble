@@ -172,7 +172,7 @@ pub fn test_some_boards(allocator: std.mem.Allocator, settings: *const Settings,
     //board.set_string(settings, 105, "zendinstallati", .Horizontal);
     //board.set_string(settings, 106, "endinstallati", .Horizontal);
     // Yep, should have been -Doptimize=ReleaseFast. But that’s the zig build version of the flag and it’s using zig build-obj. Good catch
-    const case: i32 = -4;
+    const case: i32 = 1;
     switch (case)
     {
         -4 =>
@@ -183,12 +183,12 @@ pub fn test_some_boards(allocator: std.mem.Allocator, settings: *const Settings,
         },
         -3 => // ir
         {
-            try utils.fill_board_from_txt_file(&board, "C:\\Users\\Eric\\Desktop\\iris.txt");
+            try utils.fill_board_from_txt_file(&board, "C:\\Tmp\\scrabble\\ir.txt");
             try rack.set_string(settings, "zelakje", 0);
         },
-        -2 => // el
+        -2 => // wf
         {
-            try utils.fill_board_from_txt_file(&board, "C:\\Users\\Eric\\Desktop\\wordfeud.txt");
+            try utils.fill_board_from_txt_file(&board, "C:\\Tmp\\scrabble\\wf.txt");
             board.set_string(settings, 112, "zag", .Vertical);
             try rack.set_string(settings, "geuren", 1);
         },
