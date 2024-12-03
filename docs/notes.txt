@@ -1,0 +1,118 @@
+SOME KNOWN OUTPUTS with NL.txt
+
+---------------------------------------------------------------------------
+    genmoves:
+    try board.set_string(settings, 112, "zend", .Horizontal);
+    try board.set_string(settings, 112, "zag", .Vertical);
+    var rack = try scrabble.Rack.init_string(settings, "talen");
+    rack.blanks = 2;
+    generates 61952 moves, sum-score 948611
+    (moves per second 3582117)
+---------------------------------------------------------------------------
+
+---------------------------------------------------------------------------
+    rndgame (seed 1) take best move all the time:
+    total moves generated 14910, totalscore 1032
+    (avg moves per second: 2360185)
+    (avg moves per second: 2784937) after caching SquareInfo can_ignore_crosscheck.
+    (avg moves per second: 3103599) after calulating score on the fly
+---------------------------------------------------------------------------
+
+
+-------------------
+GADDAG WITHOUT MASK
+-------------------
+RELEASE:
+generate 45255 moves time ms 20 20549700 nanos sum-score 726233
+moves per second 2202221
+
+----------------
+GADDAG WITH MASK
+----------------
+generate 45255 moves time ms 16 16432300 nanos sum-score 726233
+moves per second 2754027
+
+-- a little speedup after making params *const
+generate 45255 moves time ms 15 15404300 nanos sum-score 726233
+moves per second 2937816
+
+-- repaired crossmove generation. much better now.
+generate 61952 moves time ms 18 18781800 nanos sum-score 637076
+moves per second 3298512
+
+-- solved another bug with crosswords... speed the same
+generate 61952 moves time ms 18 18862300 nanos sum-score 637076
+moves per second 3284435
+
+-- solved score bug + crossword anchor logic
+generate 61952 moves sum-score 948611
+
+-- a reasonable speedup after some @prefetch uses.
+generate 61952 moves time ms 16 16544100 nanos sum-score 948611
+moves per second 3744658
+
+-- a slight decrease in performance after making the board customizable
+generate 61952 moves time ms 17 17294800 nanos sum-score 948611
+moves per second 3452117
+
+-- a big increase in performance by calculating scores on the fly.
+generate 61952 moves time ms 13 13555100 nanos sum-score 948611
+moves per second 4570383
+
+
+
+
+
+
+
+
+
+----------------------------------------------------------------------------------------------------------------------
+
+
+TODO: put in asserts for max values etc.
+TODO: make random tester.
+TODO: make some generic LINQ-like interfaces (count, where, any, orderby) for lists / arrays / slices
+TODO: enable passing moves.
+TODO: keep a default bag in settings to copy?
+TODO: try to rewrite calc_score so that it does not matter if the move is alreay on the board or not.
+TODO: calc_score check move is sorted (or do that outside)
+
+TODO: smart calculate score on the fly. we have to calculate the score anyway. except it will produce overhead for illegal moves. so think!
+TODO: prepare for engine: incremental updates of board stuff instead of recalculating during prepare.
+TODO: we need a (comptime) contrained search move generator for the engine. with different types of contraints (squares letter setc.). Probably include comptime filter functions.
+      in addition we have to be able to do a "just count moves without storing", a "any" etc. etc.
+TODO: we need context for MoveStoredEvent.
+TODO: squareinfo = 40 bytes. this array 17920 bytes, watch out with stack when we are going to make an engine. Maybe put it on the heap.
+TODO: better is to check if the whole board is empty during prepare()
+TODO: prevent preparing MovGen when the same board as before.
+TODO: validate board length in gen_rack_moves.
+
+
+
+
+
+// /// Only for same col or row
+// /// todo: make an unsafe version where b >= a required.
+// pub fn squares_between(a: Square, b: Square, comptime ori: Orientation) u8
+// {
+//     if (ori == .Horizontal) assert(square_y(a) == square_y(b));
+//     if (ori == .Vertical) assert(square_x(a) == square_x(b));
+//     const c: u9 = @max(a, b) - @min(a, b);
+//     return if (ori == .Horizontal) @intCast(c) else @intCast(c / 15);
+// }
+
+// pub fn square_distance(a: Square, b: Square, comptime ori: Orientation) u8
+// {
+//     return squares_between(a, b, ori) + 1;
+// }
+
+
+
+
+
+
+
+
+
+

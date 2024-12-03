@@ -1,7 +1,12 @@
-//! The basic structs for the scrabblegame: Char, Letter, Orientation, Direction, Rack, Move, Bag, Board
+//! The basic structs for the scrabblegame: Char, CharCode, Letter, Orientation, Direction, Rack, Move, Bag, Board
 //! And some language default settings.
+//! Some short terms used in the code:
+//! - bwv = board-word-value.
+//! - blv = board-letter-value.
+//! - lv = letter-value.
+//! - bow = begin-of-word.
+//! - eow = end-of-word.
 
-// TODO: put in asserts for max values etc.
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -26,13 +31,24 @@ pub const Value = u8;
 
 pub const EMPTY_CHARCODE_MASK: CharCodeMask = CharCodeMask.initEmpty();
 
+/// A little crazy experiment for a clear `not`.
+pub inline fn not(expr: bool) bool
+{
+    return !expr;
+}
+
+const Context = struct
+{
+    allocator: std.mem.Allocator,
+    settings: Settings,
+};
 
 pub fn init_default_scrabbleboard(allocator: std.mem.Allocator, settings: *const Settings) !Board
 {
-    return Board.init(allocator, settings, 15, 15, @constCast(&DEFAULT_BWV), @constCast(&DEFAULT_BLV));
+    return Board.init(allocator, settings, 15, 15, DEFAULT_BWV[0..], DEFAULT_BLV[0..]);
 }
 
-pub fn init_custom_scrabbleboard(allocator: std.mem.Allocator, settings: *const Settings, comptime width: u9, comptime height: u9, bwv: [*]Value, blv: [*]Value) !Board
+pub fn init_custom_scrabbleboard(allocator: std.mem.Allocator, settings: *const Settings, comptime width: u9, comptime height: u9, bwv: []const Value, blv: []const Value) !Board
 {
     return Board.init(allocator, settings, width, height, bwv, blv);
 }
@@ -70,9 +86,9 @@ pub const Settings = struct
     chars: [32]Char,
     /// Our value table for each letter / tile.
     values: [32]Value,
-    /// The available amounts in the game.
+    /// Table with the available amounts per letter in the bag.
     distribution: [32]u8,
-    /// The number of blanks in the game.
+    /// The number of blanks in the bag.
     blanks: u8 = 0,
     /// True if we encountered characters > 255.
     has_unicode: bool,
@@ -128,16 +144,12 @@ pub const Settings = struct
 
     pub fn lv(self: *const Settings, letter: Letter) Value
     {
-        return if (!letter.is_blank) self.values[letter.charcode] else 0;
+        return self.values[letter.charcode] * @intFromBool(not(letter.is_blank));
     }
 
     pub fn encode(self: *const Settings, u: Char) !CharCode
     {
-        return self.map.get(u) orelse
-        {
-            //std.debug.print("{u} {}", .{ u, u });
-            return ScrabbleError.CharacterNotFound;
-        };
+        return self.map.get(u) orelse return ScrabbleError.CharacterNotFound;
     }
 
     pub fn decode(self: *const Settings, c: CharCode) Char
@@ -183,7 +195,6 @@ pub const Settings = struct
         {
             const charcode = try self.encode(u);
             if (buf.len > 31) return ScrabbleError.WordTooLong;
-//                for (buf.slice()) |c| std.debug.print("{}={u}", .{u, self.decode(c)});
             buf.appendAssumeCapacity(charcode);
         }
         return buf;
@@ -204,11 +215,13 @@ pub const Letter = packed struct
         return Letter { .charcode = charcode, .is_blank = is_blank };
     }
 
+    /// Creates a non-blank letter.
     pub fn normal(charcode: CharCode) Letter
     {
         return Letter.init(charcode, false);
     }
 
+    /// Creates a blank letter.
     pub fn blank(charcode: CharCode) Letter
     {
         return Letter.init(charcode, true);
@@ -246,41 +259,15 @@ pub const MoveLetter = packed struct
     }
 };
 
+/// Array of charcodes + number of blanks separate.\
+/// In my experience (and following the move generation algorithm) the cleanest way to represent a rack.\
+/// The number of letters + blanks must be <= 7,
 pub const Rack = struct
 {
-    pub const EMPTY = Rack.init();
+    pub const EMPTY: Rack = Rack {};
 
-    letters: std.BoundedArray(CharCode, 7),
-    blanks: u3,
-
-    pub fn init() Rack
-    {
-        return std.mem.zeroes(Rack);
-    }
-
-    /// Convenience function.
-    pub fn init_string(settings: *const Settings, string: []const u8, blanks: u3) !Rack
-    {
-        var rack: Rack = EMPTY;
-        for (string) |cp|
-        {
-            const cc =  try settings.encode(cp);
-            rack.add(cc);
-        }
-        rack.blanks = blanks;
-        return rack;
-    }
-
-    /// Convenience function.
-    pub fn set_string(self: *Rack, settings: *const Settings, string: []const u8, blanks: u3) !void
-    {
-        self.clear();
-        for (string) |cp|
-        {
-            self.add(try settings.encode(cp));
-        }
-        self.blanks = blanks;
-    }
+    letters: std.BoundedArray(CharCode, 7) = .{},
+    blanks: u3 = 0,
 
     pub fn clear(self: *Rack) void
     {
@@ -315,7 +302,7 @@ pub const Rack = struct
         _ = self.letters.swapRemove(idx);
     }
 
-    /// Return new rack. used by engine
+    /// Return new rack, with the charcode at `idx` removed.
     pub fn removed(self: Rack, idx: usize) Rack
     {
         assert(self.letters.len > idx);
@@ -352,11 +339,36 @@ pub const Rack = struct
             }
         }
     }
+
+    /// Convenience function.
+    pub fn init_string(settings: *const Settings, string: []const u8, blanks: u3) !Rack
+    {
+        var rack: Rack = EMPTY;
+        //const x = settings.encode_word();
+        for (string) |cp|
+        {
+            const cc =  try settings.encode(cp);
+            rack.add(cc);
+        }
+        rack.blanks = blanks;
+        return rack;
+    }
+
+    /// Convenience function.
+    pub fn set_string(self: *Rack, settings: *const Settings, string: []const u8, blanks: u3) !void
+    {
+        self.clear();
+        for (string) |cp|
+        {
+            self.add(try settings.encode(cp));
+        }
+        self.blanks = blanks;
+    }
 };
 
 pub const Move = struct
 {
-    pub const EMPTY: Move = Move.init();
+    pub const EMPTY: Move = Move{};
 
     pub const Flags = packed struct
     {
@@ -364,7 +376,8 @@ pub const Move = struct
         is_crossword_generated: bool = false,
     };
 
-    letters: std.BoundedArray(MoveLetter, 7), // TODO: make 7 comptime global
+    /// The layed letters
+    letters: std.BoundedArray(MoveLetter, 7) = .{},
     /// Even on a 21 x 21 superscrabble board this u16 should be enough for ridiculous high scores (when we have reasonable board- and lettervalues).
     score: u16 = 0,
     /// The anchor of the move is (1) an eow board letter or (2) an empty square when generated as crossword.
@@ -372,16 +385,11 @@ pub const Move = struct
     /// Some info flags.
     flags: Flags = Flags {},
 
-    pub fn init() Move
-    {
-        return std.mem.zeroes(Move);
-    }
-
     pub fn init_with_anchor(anchor: Square) Move
     {
         return Move
         {
-            .letters = std.mem.zeroes(std.BoundedArray(MoveLetter, 7)),
+            .letters = .{},
             .score = 0,
             .anchor = anchor,
             .flags = Flags {},
@@ -427,6 +435,24 @@ pub const Move = struct
             result.appendAssumeCapacity(moveletter.square);
         }
         return result;
+    }
+
+    pub fn contains_charcode(self: *const Move, charcode: CharCode) bool
+    {
+        for (self.letters.slice()) |L|
+        {
+            if (L.letter.charcode == charcode) return true;
+        }
+        return false;
+    }
+
+    pub fn contains_blank(self: *const Move) bool
+    {
+        for (self.letters.slice()) |L|
+        {
+            if (L.letter.is_blank) return true;
+        }
+        return false;
     }
 
     pub fn find(self: *const Move, square: Square) ?Letter
@@ -481,9 +507,10 @@ pub const Move = struct
 
     /// Inserts or append a letter. If dir = backwards then insert otherwise append.\
     /// This way generated moves always are sorted.
-    pub fn appended_or_inserted(self: *const Move, letter: Letter, square: Square, comptime dir: Direction) Move
+    pub fn appended_or_inserted(self: *const Move, letter: Letter, square: Square, score_delta: u8, comptime dir: Direction) Move
     {
         var move: Move = self.*;
+        move.score += score_delta;
         if (dir == .Backwards)
         {
             move.insert_letter(letter, square);
@@ -495,25 +522,20 @@ pub const Move = struct
         return move;
     }
 
+    pub fn incremented_score(self: *const Move, score_delta: u8) Move
+    {
+        var move: Move = self.*;
+        move.score += score_delta;
+        return move;
+    }
+
+
     pub fn appended(self: *const Move, letter: Letter, square: Square) Move
     {
         var move: Move = self.*;
         move.append_letter(letter, square);
         return move;
     }
-
-    // /// EXPERIMENTAL
-    // pub fn append_or_insert(self: *Move, letter: Letter, square: Square, comptime dir: Direction) void
-    // {
-    //     if (dir == .Backwards)
-    //     {
-    //         self.insert_letter(letter, square);
-    //     }
-    //     else
-    //     {
-    //         self.add_letter(letter, square);
-    //     }
-    // }
 
     /// For movegeneration (only used for first turn).
     pub fn shift_left(self: *Move, board: *const Board, comptime orientation: Orientation) void
@@ -556,7 +578,7 @@ pub const Move = struct
 pub const Bag = struct
 {
     /// All letters in here, including the blanks.
-    str: std.BoundedArray(Letter, 256), // TODO: keep a default bag in settings to copy?
+    str: std.BoundedArray(Letter, 256),
 
     pub fn init(settings: *const Settings) Bag
     {
@@ -609,32 +631,34 @@ pub const Bag = struct
 
 pub const Board = struct
 {
-    allocator: std.mem.Allocator, // 16 bytes
-    settings: *const Settings, // 8 bytes
-    bwv: [*]Value, // 8 bytes
-    blv: [*]Value, // 8 bytes
-    squares: []Letter, // 1 byte
-    width: u9, // 2 bytes
-    height: u9, // 2 bytes
-    length: u9, // 2 bytes
-    startsquare: Square, // 2 bytes
-    //testref: []const Value,
+    allocator: std.mem.Allocator,
+    /// Reference to our currently used settings.
+    settings: *const Settings,
+    /// Reference to some bwv table.
+    bwv: []const Value,
+    /// Reference to some blv table.
+    blv: []const Value,
+    squares: []Letter,
+    width: u9,
+    height: u9,
+    /// Is `width` * `height`.
+    length: u9,
+    /// By default the middle square.
+    startsquare: Square,
 
-    fn validate_dimensions(comptime width: u9, comptime height: u9)ScrabbleError!u9 //              , bwv: [*]Value, blv: [*]Value) ScrabbleError!u9
+    fn validate_dimensions(comptime width: u9, comptime height: u9, bwv: []const Value, blv: []const Value)ScrabbleError!u9
     {
         if (width < 5 or width > 21 or height < 5 or height > 21 or width % 2 == 0 or height % 2 == 0) return ScrabbleError.InvalidBoardDimensions;
         const length: u9 = width * height;
-        //if (bwv.len != length or blv.len != length) return ScrabbleError.InvalidBoardScoreParameter;
+        if (bwv.len != length or blv.len != length) return ScrabbleError.InvalidBoardScoreParameter;
         return length;
     }
 
-    pub fn init(allocator: std.mem.Allocator, settings: *const Settings, comptime width: u9, comptime height: u9, bwv: [*]Value, blv: [*]Value) !Board
+    pub fn init(allocator: std.mem.Allocator, settings: *const Settings, comptime width: u9, comptime height: u9, bwv: []const Value, blv: []const Value) !Board
     {
-        const length: u9 = try Board.validate_dimensions(width, height);//, bwv, blv);
-        //const length: u9 = width * height;
+        const length: u9 = try Board.validate_dimensions(width, height, bwv, blv);
         const startsquare: Square = width * (height / 2) + width / 2;
         assert(startsquare == 112);
-
         return Board
         {
             .allocator = allocator,
@@ -652,8 +676,6 @@ pub const Board = struct
     pub fn deinit(self: *Board) void
     {
         self.allocator.free(self.squares);
-        //self.allocator.free(self.bwv);
-        //self.allocator.free(self.blv);
     }
 
     fn init_squares(allocator: std.mem.Allocator, len: u9) ![]Letter
@@ -772,7 +794,7 @@ pub const Board = struct
             const letter: Letter = Letter.init(cc, false);
             self.squares[q] = letter;
             //std.debug.print("{} {c}\n", .{q, char});
-            if (!self.square_has_next(q, ori, .Forwards)) break;
+            if (not(self.square_has_next(q, ori, .Forwards))) break;
             q += delta;
         }
     }
@@ -856,7 +878,7 @@ pub const Board = struct
 };
 
 /// Scans while there are letters, using ori and dir. If inclusive the startingsquare is included in the loop.
-fn BoardLetterIterator(comptime ori: Orientation, comptime dir: Direction, comptime inclusive: bool) type
+pub fn BoardLetterIterator(comptime ori: Orientation, comptime dir: Direction, comptime inclusive: bool) type
 {
     return struct
     {
@@ -876,7 +898,7 @@ fn BoardLetterIterator(comptime ori: Orientation, comptime dir: Direction, compt
             };
         }
 
-        /// Obviously dob't do this while iterating.
+        /// Obviously don't do this while iterating.
         pub fn reset(iter: *Self, square: Square) void
         {
             iter.square = square;
@@ -912,33 +934,11 @@ fn BoardLetterIterator(comptime ori: Orientation, comptime dir: Direction, compt
                 return null;
             }
         }
-
-        // fn get_next(iter: *Self, q: Square) ?Square
-        // {
-        //     return iter.board.next_square(q, ori, dir);
-        // }
     };
 }
 
-// /// Only for same col or row
-// /// todo: make an unsafe version where b >= a required.
-// pub fn squares_between(a: Square, b: Square, comptime ori: Orientation) u8
-// {
-//     if (ori == .Horizontal) assert(square_y(a) == square_y(b));
-//     if (ori == .Vertical) assert(square_x(a) == square_x(b));
-//     const c: u9 = @max(a, b) - @min(a, b);
-//     return if (ori == .Horizontal) @intCast(c) else @intCast(c / 15);
-// }
 
-// pub fn square_distance(a: Square, b: Square, comptime ori: Orientation) u8
-// {
-//     return squares_between(a, b, ori) + 1;
-// }
-
-
-/// TODO: try to rewrite it so that it does not matter if the move is alreay on the board or not.
 /// Move must be sorted by square and legal.
-/// TODO: check move is sorted (or do that outside)
 pub fn calculate_score(settings: *const Settings, board: *const Board, move: *const Move, comptime ori: Orientation) u16
 {
     //if (move.letters.len == 0) return 0;
@@ -954,9 +954,6 @@ pub fn calculate_score(settings: *const Settings, board: *const Board, move: *co
     var my_score: u32 = 0;
     var cross_score: u32 = 0;
 
-    @prefetch(&board.bwv[0], .{});
-    @prefetch(&board.blv[0], .{});
-
     // Scan board letters "outside" move, update myscore.
     var it1 = board.letter_iterator(my_first_square, ori, .Backwards, false);
     while (it1.next()) |B| my_score += settings.lv(B.letter);
@@ -968,8 +965,7 @@ pub fn calculate_score(settings: *const Settings, board: *const Board, move: *co
     var idx: u8 = 0;
     while (q <= my_last_square)
     {
-        const boardletter = board.squares[q];
-        if (boardletter.is_filled())
+        if (board.get_letter(q)) |boardletter|
         {
             my_score += settings.lv(boardletter);
         }
@@ -1036,7 +1032,7 @@ pub fn validate_board(board: *const Board, graph: *const gaddag.Graph) !bool
             {
                 //try utils.print_encoded_word(buf.slice(), board.settings);
                 //std.debug.print("h ok={}\n", .{graph.encoded_word_exists(buf.slice())});
-                if (!graph.encoded_word_exists(buf.slice()))
+                if (not(graph.encoded_word_exists(buf.slice())))
                 {
                     try utils.print_encoded_word(buf.slice(), board.settings);
                     return false;
@@ -1057,7 +1053,7 @@ pub fn validate_board(board: *const Board, graph: *const gaddag.Graph) !bool
             {
             //try utils.print_encoded_word(buf.slice(), board.settings);
             //std.debug.print("v ok={}\n", .{graph.encoded_word_exists(buf.slice())});
-                if (!graph.encoded_word_exists(buf.slice()))
+                if (not(graph.encoded_word_exists(buf.slice())))
                 {
                     try utils.print_encoded_word(buf.slice(), board.settings);
                     return false;
@@ -1197,7 +1193,6 @@ pub const DEFAULT_WORDFEUD_BWV: [225]Value =
 
 pub const DEFAULT_WORDFEUD_BLV: [225]Value =
 .{
-    //            c
     3,1,1,1,1,1,1,2,1,1,1,1,1,1,3,
     1,2,1,1,1,3,1,1,1,3,1,1,1,2,1,
     1,1,1,1,1,1,2,1,2,1,1,1,1,1,1,
@@ -1205,7 +1200,7 @@ pub const DEFAULT_WORDFEUD_BLV: [225]Value =
     1,1,1,1,1,1,2,1,2,1,1,1,1,1,1,
     1,3,1,1,1,3,1,1,1,3,1,1,1,3,1,
     1,1,2,1,1,1,1,1,1,1,1,1,2,1,1,
-    2,1,1,1,1,1,1,1,1,1,1,1,1,1,2, // c
+    2,1,1,1,1,1,1,1,1,1,1,1,1,1,2,
     1,1,2,1,1,1,1,1,1,1,1,1,2,1,1,
     1,3,1,1,1,3,1,1,1,3,1,1,1,3,1,
     1,1,1,1,1,1,2,1,2,1,1,1,1,1,1,
@@ -1214,4 +1209,3 @@ pub const DEFAULT_WORDFEUD_BLV: [225]Value =
     1,2,1,1,1,3,1,1,1,3,1,1,1,2,1,
     3,1,1,1,1,1,1,2,1,1,1,1,1,1,3,
 };
-

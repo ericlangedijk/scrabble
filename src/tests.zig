@@ -158,25 +158,147 @@ pub const RndGame = struct
     }
 };
 
+pub fn test_some_boards(allocator: std.mem.Allocator, settings: *const Settings, graph: *Graph) !void
+{
+    var board: scrabble.Board = try scrabble.init_default_scrabbleboard(allocator, settings);
+    //var board: scrabble.Board = try scrabble.init_custom_scrabbleboard(allocator, settings, 15, 15, @constCast(&scrabble.DEFAULT_WORDFEUD_BWV), @constCast(&scrabble.DEFAULT_WORDFEUD_BLV));
+    defer board.deinit();
+    var rack = scrabble.Rack.EMPTY;// scrabble.Rack.init();
+    var gen = try MovGen.init(allocator, settings, graph, null);
+    defer gen.deinit();
+    //try board.set_string(settings, 105, "zend", .Horizontal);
+    //try board.set_string(settings, 111, "sta", .Horizontal);
+    //try board.set_string(settings, 118, "ie", .Horizontal);
+    //board.set_string(settings, 105, "zendinstallati", .Horizontal);
+    //board.set_string(settings, 106, "endinstallati", .Horizontal);
+    // Yep, should have been -Doptimize=ReleaseFast. But that’s the zig build version of the flag and it’s using zig build-obj. Good catch
+    const case: i32 = -4;
+    switch (case)
+    {
+        -4 =>
+        {
+            //try utils.fill_board_from_txt_file(&board, "C:\\Users\\Eric\\Desktop\\wordfeud.txt"); // testing sidescore
+            try board.set_string(settings, 112, "z", .Vertical);
+            try rack.set_string(settings, "talen", 2);
+        },
+        -3 => // ir
+        {
+            try utils.fill_board_from_txt_file(&board, "C:\\Users\\Eric\\Desktop\\iris.txt");
+            try rack.set_string(settings, "zelakje", 0);
+        },
+        -2 => // el
+        {
+            try utils.fill_board_from_txt_file(&board, "C:\\Users\\Eric\\Desktop\\wordfeud.txt");
+            board.set_string(settings, 112, "zag", .Vertical);
+            try rack.set_string(settings, "geuren", 1);
+        },
+        -1 =>
+        {
+            try board.set_string(settings, 112, "azen", .Horizontal);
+            try rack.set_string(settings, "re", 0);
+        },
+        0 =>
+        {
+            try rack.set_string(settings, "mlantje", 0);
+        },
+        1 =>
+        {
+            // our raw speed test
+            try board.set_string(settings, 112, "zend", .Horizontal);
+            try board.set_string(settings, 112, "zag", .Vertical);
+            try rack.set_string(settings, "talen", 2);
+        },
+        2 =>
+        {
+            try board.set_string(settings, 112, "tonaler", .Horizontal);
+            try rack.set_string(settings, "lyobeoi", 0);
+        },
+        3 =>
+        {
+            try board.set_string(settings, 112, "matjes", .Horizontal);
+            try board.set_string(settings, 122, "bepraat", .Horizontal);
+            try board.set_string(settings, 78, "noren", .Vertical);
+            try board.set_string(settings, 55, "frutjes", .Vertical);
+            try board.set_string(settings, 54, "oeh", .Vertical);
+            try board.set_string(settings, 116-30, "keen", .Vertical);
+            try board.set_string(settings, 117-15, "as", .Vertical);
+            try board.set_string(settings, 124, "pofje", .Vertical);
+            try rack.set_string(settings, "dlnaien", 0);
+
+        },
+        4 =>
+        {
+            try board.set_string(settings, 107, "omwerk", .Horizontal);
+            try board.set_string(settings, 95, "terminal", .Vertical);
+            try board.set_string(settings, 212, "koos", .Horizontal);
+            try board.set_string(settings, 109+30, "hui", .Vertical);
+            try rack.set_string(settings, "nadeden", 0);
+        },
+        else => {}
+    }
+
+
+    //if (true) return;
+    utils.print_board_ex(&board, null, null, null);
+   // utils.print_rack(rack, settings);
+
+    var timer: std.time.Timer = try std.time.Timer.start();
+    gen.gen_moves(&board, &rack);
+    const elapsed = timer.lap();
+
+    gen.sort_moves();
+    var idx: usize = 0;
+    for (gen.movelist.items) |*m|
+    {
+        //if (m.flags.is_crossword_generated and scrabble.square_x(m.anchor) == 11 and !m.flags.is_horizontally_generated and m.letters.len == 7)// and m.letters.len == 4)// and m.flags.is_crossword_generated and m.first().square == 98)
+        //if (m.letters.len >= 7)//== 7 or m.find(scrabble.square_from(0,10)) != null)
+        //if (m.find(47) != null)
+        //if (m.contains_charcode(26) and !m.contains_blank())
+        if (m.letters.len >= 7)//5 and m.flags.is_horizontally_generated)
+        {
+            //_ = m;
+            //utils.printmove_only(m, settings);
+            utils.print_board_ex(&board, m, &rack, null);
+            //utils.printmove_only(m, settings);
+            idx += 1;
+        }
+        if (idx > 20) break;
+    }
+    var total: u32 = 0;
+    for(gen.movelist.items) |move|
+    {
+        total += move.score;
+    }
+
+    std.debug.print("\n\ngenerate {} moves time ms {} {} nanos sum-score {}\n", .{ gen.movelist.items.len, elapsed / 1000000, elapsed, total });
+    //std.debug.print("score calc time {} nanos\n", .{movgen.CALC});
+    std.debug.print("moves per second {}\n", .{utils.nps(gen.movelist.items.len, elapsed)});
+    //std.debug.print("ONEKIPS {}", .{movgen.ONESKIPS});
+
+    //test if dups are produced.
+    var dups: usize = 0;
+    var map = std.AutoHashMap(std.BoundedArray(scrabble.MoveLetter, 7), void).init(allocator);
+    defer map.deinit();
+    for(gen.movelist.items) |mov|
+    {
+        const result = try map.getOrPut(mov.letters);
+        if (result.found_existing)
+        {
+            //utils.printmove(&board, &mov, settings, null);
+            utils.printmove_only(&mov, settings);
+            //std.debug.print("{}", .{mov.flags.is_crossword_generated});
+            dups += 1;
+        }
+    }
+    std.debug.print("dups {} total mapped {}\n", .{dups, map.count()});
+}
 
 
 
 
-// SOME KNOWN OUTPUTS with NL.txt
 
-// ---------------------------------------------------------------------------
-//     genmoves
-//     try board.set_string(settings, 112, "zend", .Horizontal);
-//     try board.set_string(settings, 112, "zag", .Vertical);
-//     var rack = try scrabble.Rack.init_string(settings, "talen");
-//     rack.blanks = 2;
-//     generates 61952 moves, sum-score 948611
-// ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-//     rndgame (seed 1) take best move all the time
-//     total moves generated 14910, totalscore 1032
-// ---------------------------------------------------------------------------
+
 
 
 

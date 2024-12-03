@@ -615,7 +615,7 @@ pub const Node = extern struct
     mask: u32 align(1),
     // TODO the count field can disappear and replaced by popcount. but it will have 3-5 clockcycles at each call for popcount i believe.
 
-    fn init(charcode: CharCode) Node
+    inline fn init(charcode: CharCode) Node
     {
         return Node {.data = Data {.code = charcode }, .count = 0, .child_ptr = 0, .mask = 0};
     }

@@ -1,3 +1,6 @@
+
+// TODO: get rid of std.debug.print.
+
 const std = @import("std");
 
 const scrabble = @import("scrabble.zig");
@@ -20,7 +23,6 @@ pub fn nps(count: usize, elapsed_nanoseconds: u64) u64
     return @intFromFloat(s);
 }
 
-
 pub fn get_coord_name(square: scrabble.Square, board: *const scrabble.Board) [3]u8 // TODO: hm....
 {
     const x: u8 = @intCast(board.square_x(square));
@@ -30,6 +32,30 @@ pub fn get_coord_name(square: scrabble.Square, board: *const scrabble.Board) [3]
     //coord_buf[0] = 'a' + x;
     _ = std.fmt.formatIntBuf(coord_buf[1..], y + 1, 10, .lower, .{});
     return coord_buf;
+}
+
+/// quick and dirty debug test reader
+pub fn fill_board_from_txt_file(board: *scrabble.Board, filename: []const u8) !void
+{
+    const allocator = std.heap.page_allocator;
+
+    const file: std.fs.File = try std.fs.openFileAbsolute(filename, .{});
+    defer file.close();
+
+    const stat = try file.stat();
+    const file_size = stat.size;
+
+    const file_buffer = try file.readToEndAlloc(std.heap.page_allocator, file_size);
+    defer allocator.free(file_buffer);
+
+    var square: scrabble.Square = 0;
+    for (file_buffer)|u|
+    {
+        if (u <= 32) continue;
+        if (u == '.') board.squares[square] = scrabble.Letter.EMPTY
+        else if (u >= 'a' and u <= 'z') board.squares[square] = scrabble.Letter.init(try board.settings.encode(u), false);
+        square += 1;
+    }
 }
 
 pub fn printmove_only(move: *const scrabble.Move, settings: *const scrabble.Settings) void
@@ -144,7 +170,7 @@ pub fn print_board_ex(board: *const scrabble.Board, move: ?*const scrabble.Move,
     if (move) |m|
     {
         const cc = get_coord_name(m.anchor, board) ;
-        std.debug.print("move: lay {}, anchor {s}, score {}\n", .{m.letters.len, cc, m.score});
+        std.debug.print("move: lay {}, anchor {s}, score {} (hgen={} cgen={})\n", .{m.letters.len, cc, m.score, m.flags.is_horizontally_generated,  m.flags.is_crossword_generated});
     }
     if (bag) |b| std.debug.print("bag: {}\n", .{b.str.len});
 }
