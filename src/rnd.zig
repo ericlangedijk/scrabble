@@ -51,6 +51,12 @@ pub const Random = struct
         return a ^ b;
     }
 
+    pub fn next_u64_max(self: *Random, max: u64) u64
+    {
+        const n = self.next_u64() % max;
+        return n;
+    }
+
     pub fn next_u64_range(self: *Random, min: u64, max: u64) u64
     {
         if (max > min)
@@ -64,7 +70,6 @@ pub const Random = struct
             return max;
         }
     }
-
 };
 
 

@@ -23,6 +23,7 @@ const Graph = gaddag.Graph;
 const Node = gaddag.Node;
 
 const MoveStoredEvent = fn (move: *const Move) void;
+const TestEvent = fn (ctx: anytype, move: *const Move) void;
 
 /// A fast movegenerator. 4.6 million moves per second measured.\
 /// As far as I know it generates all possible moves for any situation. And produces no duplicates.
@@ -91,7 +92,7 @@ pub const MovGen = struct
         }
     }
 
-    /// Prepare square info. We have to sacrificle 0.01 milliseconds here.
+    /// Prepare square info. We have to sacrifice 0.01 milliseconds here.
     fn prepare(self: *MovGen, board: *const Board) void
     {
         self.movelist.items.len = 0;
@@ -147,7 +148,7 @@ pub const MovGen = struct
 
     /// Process each anchor square.
     fn process_anchors(self: *MovGen, board: *const Board, rack: *const Rack) void
-     {
+    {
         const root: *const Node = self.graph.get_rootnode();
         const wordmul: u16 = 1;
         const sidescores: u16 = 0;
@@ -293,8 +294,9 @@ pub const MovGen = struct
             self.gen(board, nextsquare, node, rack, move, wordmul, sidescores + this_sidescore, flags, ori, dir);
         }
 
-        // Magic recursive turnaround: we go back to the anchor square (eow) (or the crossword anchor). and check we can put a letter after that. Switch to bow!
+        // Magic recursive turnaround: we go back to the anchor square (eow) (or the crossword anchor). and check we can put a letter after that.
         // It is important *not* to process any squares we already scanned during backwards processing.
+        // Switch to bow node! We switch from prefix scanning (backwards) to suffix scanning (forwards).
         if (dir == .Backwards)
         {
             if (board.is_free(square, ori, dir) and board.is_free(move.anchor, ori, .Forwards))
@@ -403,8 +405,8 @@ pub const MovGen = struct
             {
                 const first = storedmove.first();
                 const inf = &self.squareinfo[first.square];
-                if (inf.is_one_mask_set(first.letter)) return;
-                inf.mark_one_mask_set(first.letter);
+                if (inf.is_one_letter_move_mask_set(first.letter)) return;
+                inf.mark_one_letter_move_mask_set(first.letter);
             }
             storedmove.score *= wordmul;
             storedmove.score += sidescore;
@@ -422,7 +424,7 @@ pub const MovGen = struct
 
     fn gen_pass_moves() void
     {
-
+        // The correct algorithm I have somewhere in Delphi.
     }
 
     /// If the board is empty, all possible horizontal moves are generated from the graph.\
@@ -540,7 +542,7 @@ pub const SquareInfo = struct
     /// Vertical info
     vert: OrientedInfo = OrientedInfo {},
     /// Cache for one-letter moves, preventing 1-letter move duplicates. Note that it is including the blank, so 64 bits needed.
-    one_letter_used_mask: std.bit_set.IntegerBitSet(64) = EMPTY_LETTER_MASK,
+    one_letter_move_used_mask: std.bit_set.IntegerBitSet(64) = EMPTY_LETTER_MASK,
 
     fn is_processed(self: *const SquareInfo, comptime ori: Orientation) bool
     {
@@ -596,14 +598,14 @@ pub const SquareInfo = struct
         };
     }
 
-    fn is_one_mask_set(self: *const SquareInfo, letter: Letter) bool
+    fn is_one_letter_move_mask_set(self: *const SquareInfo, letter: Letter) bool
     {
-        return self.one_letter_used_mask.isSet(letter.as_u6());
+        return self.one_letter_move_used_mask.isSet(letter.as_u6());
     }
 
-    fn mark_one_mask_set(self: *SquareInfo, letter: Letter) void
+    fn mark_one_letter_move_mask_set(self: *SquareInfo, letter: Letter) void
     {
-        self.one_letter_used_mask.set(letter.as_u6());
+        self.one_letter_move_used_mask.set(letter.as_u6());
     }
 
     pub fn get_excluded_mask(self: *const SquareInfo, comptime ori: Orientation) CharCodeMask

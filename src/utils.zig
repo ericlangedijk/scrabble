@@ -1,5 +1,5 @@
 
-// TODO: get rid of std.debug.print.
+
 
 const std = @import("std");
 
@@ -7,7 +7,6 @@ const scrabble = @import("scrabble.zig");
 
 pub fn nps(count: usize, elapsed_nanoseconds: u64) u64
 {
-    // Avoid division by zero
     if (elapsed_nanoseconds == 0)
     {
         return 0;
@@ -21,6 +20,15 @@ pub fn nps(count: usize, elapsed_nanoseconds: u64) u64
      const s: f64 =  (a * 1_000_000_000.0) / b;
 
     return @intFromFloat(s);
+}
+
+pub fn percentage(count: usize, total: usize) f32
+{
+    if (total == 0) return 100.0;
+
+    const a: f32 = @floatFromInt(count);
+    const b: f32 = @floatFromInt(total);
+    return (a / b) * 100.0;
 }
 
 pub fn get_coord_name(square: scrabble.Square, board: *const scrabble.Board) [3]u8 // TODO: hm....

@@ -5,3 +5,4 @@ main.exe.obj
 main.pdb
 defs.zig
 engine.zig
+debugstuff.zig

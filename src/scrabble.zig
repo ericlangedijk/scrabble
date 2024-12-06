@@ -75,6 +75,19 @@ pub const Direction = enum
     }
 };
 
+pub const Player = enum(u8)
+{
+    A = 0,
+    B = 1,
+
+    pub inline fn opp(self: Player) Player
+    {
+        return @enumFromInt(@intFromEnum(self) ^ 1);
+        //@enumFromInt()
+        //return if (self == .A) .B else .A;
+    }
+};
+
 pub const Settings = struct
 {
     allocator: std.mem.Allocator,
@@ -84,6 +97,8 @@ pub const Settings = struct
     map: std.AutoHashMap(Char, CharCode),
     /// Our Char table.
     chars: [32]Char,
+    /// Our uppercase table.
+    uppers: [32]Char,
     /// Our value table for each letter / tile.
     values: [32]Value,
     /// Table with the available amounts per letter in the bag.
@@ -102,8 +117,10 @@ pub const Settings = struct
             .Slovenian => &SlovenianDef,
         };
 
+        assert(def.unique_letters.len < 32);
         assert(def.unique_letters.len == def.values.len);
         assert(def.unique_letters.len == def.distribution.len);
+        assert(def.unique_letters.len == def.upper_letters.len);
 
         var result = Settings
         {
@@ -111,6 +128,7 @@ pub const Settings = struct
             .language = language,
             .map = std.AutoHashMap(Char, CharCode).init(allocator),
             .chars = std.mem.zeroes([32]Char),
+            .uppers = std.mem.zeroes([32]Char),
             .values = std.mem.zeroes([32]Value),
             .distribution = std.mem.zeroes([32]u8),
             .blanks = 0,
@@ -123,10 +141,11 @@ pub const Settings = struct
 
         // Generate our codes, starting with 1
         var code: CharCode = 1;
-        for(def.unique_letters, def.values, def.distribution) |char, value, amount|
+        for(def.unique_letters, def.upper_letters, def.values, def.distribution) |char, upperchar, value, amount|
         {
             try result.map.put(char, code);
             result.chars[code] = char;
+            result.uppers[code] = upperchar;
             result.values[code] = value;
             result.distribution[code] = amount;
             if (char > 255) result.has_unicode = true;
@@ -366,6 +385,7 @@ pub const Rack = struct
     }
 };
 
+/// 22 bytes.
 pub const Move = struct
 {
     pub const EMPTY: Move = Move{};
@@ -629,6 +649,19 @@ pub const Bag = struct
     }
 };
 
+// incremental update
+// is_border(4x)
+// is_free (4x)
+// is_neigbbours (4x)
+// hash??
+
+// or work with "slots"
+// 1 slot is :
+// letter u8
+// flags u8
+// bwv u4
+// blv u4
+
 pub const Board = struct
 {
     allocator: std.mem.Allocator,
@@ -641,10 +674,11 @@ pub const Board = struct
     squares: []Letter,
     width: u9,
     height: u9,
-    /// Is `width` * `height`.
+    /// = `width` * `height`.
     length: u9,
     /// By default the middle square.
     startsquare: Square,
+    player: Player,
 
     fn validate_dimensions(comptime width: u9, comptime height: u9, bwv: []const Value, blv: []const Value)ScrabbleError!u9
     {
@@ -670,6 +704,7 @@ pub const Board = struct
             .length = length,
             .height = height,
             .startsquare = startsquare,
+            .player = .A,
         };
     }
 
@@ -774,13 +809,24 @@ pub const Board = struct
         return if (result.is_filled()) result else null;
     }
 
-    /// Move must be sorted and legal.
+    /// Move must be sorted and legal and not on the board.
     pub fn make_move(self: *Board, move: *const Move) void
     {
         for (move.letters.slice()) |moveletter|
         {
             self.squares[moveletter.square] = moveletter.letter;
         }
+        self.player = self.player.opp();
+    }
+
+    /// Move must be sorted and legal and on the board.
+    pub fn unmake_move(self: *Board, move: *const Move) void
+    {
+        for (move.letters.slice()) |moveletter|
+        {
+            self.squares[moveletter.square] = Letter.EMPTY;
+        }
+        self.player = self.player.opp();
     }
 
     /// Convenience debug function.
@@ -1102,6 +1148,7 @@ pub const Language = enum
 const LocalDef = struct
 {
     unique_letters: []const u21,
+    upper_letters: []const u21,
     values: []const Value,
     distribution: []const u8,
     blanks: u8,
@@ -1110,6 +1157,7 @@ const LocalDef = struct
 const DutchDef = LocalDef
 {
     .unique_letters = &.{ 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z' },
+    .upper_letters  = &.{ 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z' },
     .values         = &.{  1,   3,   5,   2,   1,   4,   3,   4,   1,   4,   3,   3,   3,   1,   1,   3,   10,  2,   2,   2,   4,   4,   5,   8,   8,   4 },
     .distribution   = &.{  6,   2,   2,   5,   18,  2,   3,   2,   4,   2,   3,   3,   3,   10,  6,   2,   1,   5,   5,   5,   3,   2,   2,   1,   1,   2 },
     .blanks = 2,
@@ -1118,6 +1166,7 @@ const DutchDef = LocalDef
 const EnglishDef = LocalDef
 {
     .unique_letters = &.{ 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z' },
+    .upper_letters  = &.{ 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z' },
     .values         = &.{  1,   3,   3,   2,   1,   4,   2,   4,   1,   8,   5,   1,   3,   1,   1,   3,   10,  1,   1,   1,   1,   4,   4,   8,   4,   10 },
     .distribution   = &.{  9,   2,   2,   4,   12,  2,   3,   2,   9,   1,   1,   4,   2,   6,   8,   2,   1,   6,   4,   6,   4,   2,   2,   1,   2,   1 },
     .blanks = 2,
@@ -1126,6 +1175,7 @@ const EnglishDef = LocalDef
 const SlovenianDef = LocalDef
 {
     .unique_letters = &.{ 'a', 'b', 'c', 'č', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'r', 's', 'š', 't', 'u', 'v', 'z', 'ž' },
+    .upper_letters  = &.{ 'A', 'B', 'C', 'Č', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'R', 'S', 'Š', 'T', 'U', 'V', 'Z', 'Ž' },
     .values         = &.{  1,   4,   8,   5,   2,   1,   10,  4,   5,   1,   1,   3,   1,   3,   1,   1,   3,   1,   1,   6,   1,   3,   2,   4,   10 },
     .distribution   = &.{  10,  2,   1,   1,   4,   11,  1,   2,   1,   9,   4,   3,   4,   2,   7,   8,   2,   6,   6,   1,   4,   2,   4,   2,   1 },
     .blanks = 2,

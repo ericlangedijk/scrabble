@@ -405,6 +405,18 @@ pub const Graph = struct
         return if (node.data.is_eow) node else null;
     }
 
+    pub fn find_suffix(self: *const Graph, word: []const u8, comptime whole_word: bool) bool
+    {
+        const encoded = self.settings.encode_word(word) catch return false;
+        if (encoded.len == 0) return false;
+        var node = self.get_rootnode();
+        for(encoded.slice()) |charcode|
+        {
+            node = self.find_node(node, charcode) orelse return false;
+        }
+        return if (whole_word) node.data.is_whole_word else true;
+    }
+
     /// private
     /// TODO: allow one-letter words to be a whole word.
     fn add_word(self: *Graph, word: []const u8) !void
@@ -646,3 +658,34 @@ pub const Node = extern struct
         return self.mask & (@as(u32, 1) << charcode) != 0;
     }
 };
+
+// const GraphIterator = struct
+// {
+//     graph: *const Graph,
+//     root: Node,
+//     stack: [32]Node,
+//     depth: u8,
+
+
+//     fn init(graph: *const Graph) GraphIterator
+//     {
+//         return GraphIterator
+//         {
+//             .graph = graph,
+//             .root = graph.get_rootnode().*,
+//             .stack = std.mem.zeroes([32]Node),
+//             .depth = 0,
+//         };
+//     }
+
+//     fn next(self: *GraphIterator) []const CharCode
+//     {
+//         //return self.stack[
+//     }
+
+//     fn walk(self: *GraphIterator, buf: std.BoundedArray(CharCode, 32)) void
+//     {
+//         _ = buf;
+//     }
+
+// };

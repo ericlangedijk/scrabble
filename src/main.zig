@@ -25,34 +25,32 @@ pub fn main() !void
     defer { _ = gpa.deinit(); }
     const allocator = gpa.allocator();
 
-    var settings = try Settings.init(allocator, .Dutch);
+    var settings = try Settings.init(allocator, .English);
     defer settings.deinit();
 
-    // if (true) return;
-    // var g: gaddag.Graph = try gaddag.load_graph_from_text_file("C:\\Data\\ScrabbleData\\nl.txt", allocator, &settings);
-    // try gaddag.save_graph_to_bin_file(&g, "C:\\Data\\ScrabbleData\\nl.bin");
-    var g: gaddag.Graph = try gaddag.load_graph_from_bin_file("C:\\Data\\ScrabbleData\\nl.bin", allocator, &settings);
+    var g: gaddag.Graph = try gaddag.load_graph_from_text_file("C:\\Data\\ScrabbleData\\en.txt", allocator, &settings);
+    // 100+ MegaByte!! but loads faster than building the tree.
+    //try gaddag.save_graph_to_bin_file(&g, "C:\\Data\\ScrabbleData\\en.bin");
+    //var g: gaddag.Graph = try gaddag.load_graph_from_bin_file("C:\\Data\\ScrabbleData\\en.bin", allocator, &settings);
     defer g.deinit();
-    try g.validate();
 
-    //try test_random_game(allocator, &settings, &g);
-    try tests.test_some_boards(allocator, &settings, &g);
 
+    // try test_random_game(allocator, &settings, &g);
+    try tests.test_some_board(allocator, &settings, &g);
+
+    // try @import("debugstuff.zig").debug_some_boards(allocator, &settings, &g);
     std.debug.print("Program ready. press enter to quit\n", .{});
     try readline();
 }
 
-fn test_random_games(allocator: std.mem.Allocator, settings: *const Settings, graph: *Graph) !void
+fn test_random_game(allocator: std.mem.Allocator, settings: *const Settings, graph: *Graph) !void
 {
     var game: tests.RndGame = try tests.RndGame.init(allocator, settings, graph, 1);
     defer game.deinit();
-    for (0..1) |_|
-    {
-        const ok: bool = try game.play(true, 1);
-        if (!ok) break;
-    }
+    try game.play(true, 1);
 }
 
+/// Temp solution.
 const UTF8ConsoleOutput = struct
 {
     const builtin = @import("builtin");

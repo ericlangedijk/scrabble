@@ -1,5 +1,4 @@
 SOME KNOWN OUTPUTS with NL.txt
-
 ---------------------------------------------------------------------------
     genmoves:
     try board.set_string(settings, 112, "zend", .Horizontal);
@@ -18,11 +17,17 @@ SOME KNOWN OUTPUTS with NL.txt
     (avg moves per second: 3103599) after calulating score on the fly
 ---------------------------------------------------------------------------
 
+SOME KNOWN OUTPUTS with EN.txt
+---------------------------------------------------------------------------
+    rndgame (seed 1) take best move all the time:
+    total moves generated 9320, totalscore 750
+    (avg moves per second: 2579716)
+---------------------------------------------------------------------------
+
 
 -------------------
 GADDAG WITHOUT MASK
 -------------------
-RELEASE:
 generate 45255 moves time ms 20 20549700 nanos sum-score 726233
 moves per second 2202221
 
@@ -72,7 +77,7 @@ moves per second 4711823
 
 ----------------------------------------------------------------------------------------------------------------------
 
-
+TODO: get rid of std.debug.print.
 TODO: put in asserts for max values etc.
 TODO: make random tester.
 TODO: make some generic LINQ-like interfaces (count, where, any, orderby) for lists / arrays / slices
@@ -111,6 +116,9 @@ TODO: validate board length in gen_rack_moves.
 // }
 
 
+
+https://www.cross-tables.com/annotated.php?u=37031
+https://cesardelsolar.com/posts/2023-06-14-scrabble-endgames-chess-techniques/
 
 
 
